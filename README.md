@@ -138,14 +138,14 @@ Configurable in **Settings > CivitAI Manager Plus**:
 ### Method 1: From URL (Recommended)
 1. Open **Extensions** tab in SD WebUI
 2. Go to **Install from URL**
-3. Paste: `https://github.com/acer1204/SD-Civitai-Browser-Helper.git`
+3. Paste: `https://github.com/acer1204/SD-CivitAI-Manager-Plus.git`
 4. Click **Install**
 5. Restart SD WebUI
 
 ### Method 2: Manual
 ```bash
 cd stable-diffusion-webui/extensions
-git clone https://github.com/acer1204/SD-Civitai-Browser-Helper.git sd-civitai-browser-new
+git clone https://github.com/acer1204/SD-CivitAI-Manager-Plus.git sd-civitai-browser-new
 ```
 Restart SD WebUI.
 
@@ -318,14 +318,14 @@ MIT License
 ### 方法一：從 URL 安裝（推薦）
 1. 開啟 SD WebUI 的 **Extensions** 分頁
 2. 前往 **Install from URL**
-3. 貼上：`https://github.com/acer1204/SD-Civitai-Browser-Helper.git`
+3. 貼上：`https://github.com/acer1204/SD-CivitAI-Manager-Plus.git`
 4. 點擊 **Install**
 5. 重啟 SD WebUI
 
 ### 方法二：手動安裝
 ```bash
 cd stable-diffusion-webui/extensions
-git clone https://github.com/acer1204/SD-Civitai-Browser-Helper.git sd-civitai-browser-new
+git clone https://github.com/acer1204/SD-CivitAI-Manager-Plus.git sd-civitai-browser-new
 ```
 重啟 SD WebUI。
 
