@@ -1,6 +1,6 @@
 # CivitAI Manager Plus
 
-A reliable, streamlined [CivitAI](https://civitai.com/) model manager extension for [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui). Built to replace existing CivitAI extensions that are unstable, cluttered, or lack proper offline support.
+A reliable, streamlined [CivitAI](https://civitai.com/) model manager extension for [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui). As a frequent CivitAI user, I referenced existing tools and built one that's smooth to use and actually stable.
 
 **[中文說明](#中文說明)**
 
@@ -226,7 +226,7 @@ This project is licensed under the [AGPL-3.0 License](LICENSE).
 
 ## CivitAI Manager Plus
 
-穩定、精簡的 [CivitAI](https://civitai.com/) 模型管理擴充功能，適用於 [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui)。為了取代現有不穩定、介面雜亂且缺乏完善離線支援的 CivitAI 擴充而開發。
+穩定、精簡的 [CivitAI](https://civitai.com/) 模型管理擴充功能，適用於 [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui)。自己常用 CivitAI，參考了現有的工具後，順手寫了一個自己用起來順手也穩定的擴充。
 
 ## 為什麼開發這個擴充？
 
