@@ -339,50 +339,68 @@ def scan_installed_models():
 
 
 def scan_installed_civitai_models():
-    """Scan installed models and try to find CivitAI model info from metadata files.
+    """Scan models and embeddings directories for installed models.
     Returns list of dicts with model info including civitai_model_id if available."""
     installed_models = []
-    folders_set = set()
-    seen_paths = set()  # Track seen file paths to avoid duplicates
+    seen_paths = set()
+    model_extensions = ('.safetensors', '.ckpt', '.pt', '.bin', '.pth')
 
-    for ctype, (_, default_folder) in CONTENT_TYPE_FOLDERS.items():
-        folder = get_model_folder(ctype)
-        if not os.path.isdir(folder):
-            continue
+    # Scan roots: models_path and embeddings
+    scan_roots = []
+    if os.path.isdir(models_path):
+        scan_roots.append(('models', models_path))
+    embeddings_path = os.path.join(data_path, 'embeddings')
+    if os.path.isdir(embeddings_path):
+        scan_roots.append(('embeddings', embeddings_path))
 
+    for root_name, root_path in scan_roots:
         try:
-            for root, dirs, files in os.walk(folder, followlinks=True):
-                # Collect folder paths for tree
-                rel_folder = os.path.relpath(root, folder)
-                if rel_folder != '.':
-                    folders_set.add(rel_folder)
-
+            for dirpath, dirs, files in os.walk(root_path, followlinks=True):
                 for f in files:
                     ext = os.path.splitext(f)[1].lower()
-                    if ext not in ('.safetensors', '.ckpt', '.pt', '.bin', '.pth'):
+                    if ext not in model_extensions:
                         continue
 
-                    file_path = os.path.join(root, f)
-                    
-                    # Skip if we've already seen this file
+                    file_path = os.path.join(dirpath, f)
                     if file_path in seen_paths:
                         continue
                     seen_paths.add(file_path)
-                    
-                    json_path = os.path.splitext(file_path)[0] + '.json'
+
+                    # Folder relative to the scan root's parent (e.g. "models/Lora/sub")
+                    rel_from_root = os.path.relpath(dirpath, root_path)
+                    if rel_from_root == '.':
+                        folder = root_name
+                    else:
+                        folder = os.path.join(root_name, rel_from_root).replace('\\', '/')
 
                     model_info = {
                         'filename': f,
                         'path': file_path,
-                        'folder': rel_folder if rel_folder != '.' else '',
-                        'content_type': ctype,
+                        'folder': folder,
+                        'content_type': '',
                         'size': os.path.getsize(file_path),
                         'civitai_model_id': None,
                         'civitai_model_name': None,
                         'thumbnail': None,
+                        'thumbnail_type': 'image',
                     }
 
+                    base_path = os.path.splitext(file_path)[0]
+
+                    # Check for local preview (image or video)
+                    for pext in ('.preview.png', '.preview.jpeg', '.preview.jpg'):
+                        preview_path = base_path + pext
+                        if os.path.exists(preview_path):
+                            model_info['thumbnail'] = f"/file={preview_path}"
+                            break
+                    if not model_info['thumbnail']:
+                        preview_mp4 = base_path + '.preview.mp4'
+                        if os.path.exists(preview_mp4):
+                            model_info['thumbnail'] = f"/file={preview_mp4}"
+                            model_info['thumbnail_type'] = 'video'
+
                     # Try to read metadata from JSON file
+                    json_path = base_path + '.json'
                     if os.path.exists(json_path):
                         try:
                             with open(json_path, 'r', encoding='utf-8') as jf:
@@ -391,6 +409,10 @@ def scan_installed_civitai_models():
                                     model_info['civitai_model_id'] = meta.get('model_id')
                                     model_info['civitai_model_name'] = meta.get('model_name')
                                     model_info['version_name'] = meta.get('version_name')
+                                    model_info['content_type'] = meta.get('content_type', '')
+                                    if not model_info['thumbnail'] and meta.get('thumbnail_url'):
+                                        model_info['thumbnail'] = meta['thumbnail_url']
+                                        model_info['thumbnail_type'] = meta.get('thumbnail_type', 'image')
                         except Exception:
                             pass
 
@@ -398,7 +420,7 @@ def scan_installed_civitai_models():
         except Exception:
             pass
 
-    return installed_models, sorted(folders_set)
+    return installed_models, []
 
 
 def make_installed_cards_html(installed_models):

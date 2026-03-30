@@ -1,4 +1,4 @@
-"""CivitAI Browser - Main UI for Stable Diffusion WebUI."""
+"""CivitAI Manager Plus - Main UI for Stable Diffusion WebUI."""
 
 import sys
 import os
@@ -40,7 +40,7 @@ _model_data_cache = {}  # Temporary cache: model_id -> {"model_data": ..., "vers
 _SEARCH_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "search_config.json")
 
 
-def _save_search_config(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
+def _save_search_config(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
     """Save last search configuration to file."""
     config = {
         "query": query or "",
@@ -50,7 +50,8 @@ def _save_search_config(query, search_type, content_type, base_model, sort_type,
         "sort_type": sort_type or "Highest Rated",
         "period": period or "AllTime",
         "nsfw": True if nsfw else False,
-        "cards_per_page": int(cards_per_page) if cards_per_page else 20
+        "cards_per_page": int(cards_per_page) if cards_per_page else 20,
+        "save_local": True if save_local else False
     }
     try:
         with open(_SEARCH_CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -69,7 +70,8 @@ def _load_search_config():
         "sort_type": "Highest Rated",
         "period": "AllTime",
         "nsfw": getattr(shared.opts, "civitai_default_nsfw", False),
-        "cards_per_page": 20
+        "cards_per_page": 20,
+        "save_local": False
     }
     try:
         if os.path.exists(_SEARCH_CONFIG_FILE):
@@ -303,15 +305,15 @@ def _do_search_internal(query, search_type, content_type, base_model, sort_type,
     return html, page_display
 
 
-def do_search(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
+def do_search(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
     global _page_cursors
     _page_cursors = {}  # Reset cursors for new search
     _refresh_installed()
-    _save_search_config(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page)
+    _save_search_config(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local)
     return _do_search_internal(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, 1)
 
 
-def do_page(direction, query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
+def do_page(direction, query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
     page = _current_page
     if direction == "next" and page < _total_pages:
         page += 1
@@ -522,9 +524,11 @@ def do_download_selected(save_local_info=False):
                 creator, model_name, auto_organize
             )
             preview_url = ""
+            preview_type = "image"
             images = version.get("images", [])
             if images:
                 preview_url = images[0].get("url", "")
+                preview_type = images[0].get("type", "image")
 
             dl_manager.add(
                 url=dl_url,
@@ -534,7 +538,8 @@ def do_download_selected(save_local_info=False):
                 version_name=version.get("name", ""),
                 model_id=int(mid),
                 sha256=primary.get("hashes", {}).get("SHA256", ""),
-                preview_url=preview_url
+                preview_url=preview_url,
+                preview_type=preview_type
             )
             added += 1
 
@@ -613,9 +618,11 @@ def start_download(model_id_str, version_name, file_index_str, install_path, sav
             sha256 = file_data.get("hashes", {}).get("SHA256", "")
 
             preview_url = ""
+            preview_type = "image"
             images = v.get("images", [])
             if images:
                 preview_url = images[0].get("url", "")
+                preview_type = images[0].get("type", "image")
 
             os.makedirs(install_path, exist_ok=True)
 
@@ -623,7 +630,7 @@ def start_download(model_id_str, version_name, file_index_str, install_path, sav
                 url=dl_url, filename=filename, install_path=install_path,
                 model_name=model_name, version_name=version_name,
                 model_id=int(model_id_str), sha256=sha256,
-                preview_url=preview_url
+                preview_url=preview_url, preview_type=preview_type
             )
 
             yield gr.update(value=dl_manager.get_status_html())
@@ -679,12 +686,12 @@ def do_toggle_favorite(model_id_str, model_name, thumbnail):
     return gr.update(value=get_favorites_html()), status
 
 
-def do_prev_page(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
-    return do_page("prev", query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page)
+def do_prev_page(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
+    return do_page("prev", query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local)
 
 
-def do_next_page(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
-    return do_page("next", query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page)
+def do_next_page(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
+    return do_page("next", query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local)
 
 
 def do_refresh_fav():
@@ -1034,73 +1041,101 @@ def get_installed_models_html(filter_folder=""):
             if m.get('folder', '').replace('\\', '/').startswith(filter_folder_normalized)
         ]
 
-    # Fetch thumbnails for models with CivitAI ID
-    for model in installed_models:
-        if model.get('civitai_model_id') and not model.get('thumbnail'):
-            try:
-                data = api.get_model(model['civitai_model_id'])
-                if data:
+    # For models without local preview, fetch thumbnails from API in background
+    needs_fetch = [m for m in installed_models if not m.get('thumbnail') and m.get('civitai_model_id')]
+    if needs_fetch:
+        def _bg_fetch_thumbnails(models):
+            for model in models:
+                try:
+                    data = api.get_model(model['civitai_model_id'])
+                    if not data:
+                        continue
                     versions = data.get('modelVersions', [])
-                    if versions:
-                        images = versions[0].get('images', [])
-                        if images:
-                            img = images[0]
-                            model['thumbnail'] = img.get('url', '')
-                            model['thumbnail_type'] = img.get('type', 'image')
-            except Exception:
-                pass
-    
+                    if not versions:
+                        continue
+                    images = versions[0].get('images', [])
+                    if not images:
+                        continue
+
+                    img = images[0]
+                    url = img.get('url', '')
+                    img_type = img.get('type', 'image')
+                    if not url:
+                        continue
+
+                    base = os.path.splitext(model['path'])[0]
+
+                    if img_type == 'video':
+                        # Video: download as .preview.mp4
+                        dl_url = url.replace("width=", "transcode=true,width=")
+                        preview_path = base + '.preview.mp4'
+                        if not os.path.exists(preview_path):
+                            try:
+                                resp = api.session.get(dl_url, timeout=60)
+                                if resp.status_code == 200:
+                                    with open(preview_path, 'wb') as f:
+                                        f.write(resp.content)
+                            except Exception:
+                                pass
+                        model['thumbnail'] = f"/file={preview_path}" if os.path.exists(preview_path) else url
+                        model['thumbnail_type'] = 'video'
+                    else:
+                        # Image: download as .preview.png
+                        preview_path = base + '.preview.png'
+                        if not os.path.exists(preview_path):
+                            try:
+                                resp = api.session.get(url, timeout=30)
+                                if resp.status_code == 200:
+                                    with open(preview_path, 'wb') as f:
+                                        f.write(resp.content)
+                            except Exception:
+                                pass
+                        model['thumbnail'] = f"/file={preview_path}" if os.path.exists(preview_path) else url
+                        model['thumbnail_type'] = 'image'
+                except Exception:
+                    pass
+        threading.Thread(target=_bg_fetch_thumbnails, args=(needs_fetch,), daemon=True).start()
+
     return make_installed_cards_html(installed_models)
 
 
 def get_folder_tree_html():
     """Generate HTML for folder tree navigation."""
     from cb_api import scan_installed_civitai_models
-    
+
     installed_models, _ = scan_installed_civitai_models()
-    
-    # Build folder tree structure
+
+    # Build folder tree from model folder paths (e.g. "models/Lora/sub", "embeddings")
     folder_tree = {}
     for model in installed_models:
-        folder = model.get('folder', '')
+        folder = model.get('folder', '').replace('\\', '/')
         if folder:
-            # Normalize path separators
-            folder = folder.replace('\\', '/')
             parts = folder.split('/')
-            
-            # Build nested structure
             current = folder_tree
             for part in parts:
                 if part not in current:
                     current[part] = {}
                 current = current[part]
-    
+
     def render_folder_tree(tree, indent=0, path=''):
-        """Recursively render folder tree as HTML."""
         html_parts = []
-        
         for folder_name, sub_tree in sorted(tree.items()):
             full_path = f"{path}/{folder_name}" if path else folder_name
-            indent_class = f"civ-folder-subitem" if indent > 0 else "civ-folder-item"
-            indent_style = f"padding-left: {indent * 16 + 12}px;" if indent > 0 else ""
-            
-            # Folder item
+            pad = indent * 16 + 12
+            icon = "📁" if indent <= 1 else "📂"
             html_parts.append(
-                f'<div class="{indent_class}" data-folder="{full_path.replace(chr(34), "&quot;")}" '
-                f'style="{indent_style}">{"📁 " if indent == 0 else "📄 "}{folder_name}</div>'
+                f'<div class="civ-folder-subitem" data-folder="{full_path.replace(chr(34), "&quot;")}" '
+                f'style="padding-left: {pad}px;">{icon} {folder_name}</div>'
             )
-            
-            # Render subfolders
             if sub_tree:
                 html_parts.append(render_folder_tree(sub_tree, indent + 1, full_path))
-        
         return ''.join(html_parts)
-    
+
     parts = ['<div class="civ-folder-tree">']
     parts.append('<div class="civ-folder-item civ-folder-all" data-folder="">📁 All Models</div>')
     parts.append(render_folder_tree(folder_tree))
     parts.append('</div>')
-    
+
     return ''.join(parts)
 
 
@@ -1110,7 +1145,7 @@ def load_installed_model_details(model_id_str, model_name):
         # No CivitAI ID, show basic file info
         if model_name:
             return (
-                gr.update(value=f'<div class="civ-preview"><h2>{model_name}</h2><p>No CivitAI metadata found. This model was not downloaded from CivitAI Browser.</p></div>'),
+                gr.update(value=f'<div class="civ-preview"><h2>{model_name}</h2><p>No CivitAI metadata found. This model was not downloaded from CivitAI Manager Plus.</p></div>'),
                 gr.update(value=""),
                 gr.update(value=""),
                 gr.update(value=""),
@@ -1296,25 +1331,9 @@ def on_ui_tabs():
                     download_selected_btn = gr.Button("Download Selected", variant="primary", scale=1)
                     save_local_on_download = gr.Checkbox(
                         label="💾 Save Local Info",
-                        value=False, scale=1
+                        value=_saved["save_local"], scale=1
                     )
                 select_status = gr.Textbox(value="", show_label=False, interactive=False, max_lines=1)
-
-                gr.Markdown("### Model Details")
-                with gr.Row():
-                    version_dropdown = gr.Dropdown(label="Version", choices=[], visible=False, scale=2)
-                    file_dropdown = gr.Dropdown(label="File", choices=[], visible=False, scale=2)
-
-                with gr.Row():
-                    install_path_box = gr.Textbox(label="Install path", visible=False, interactive=True, scale=3)
-                    download_btn = gr.Button("Download", variant="primary", visible=False, scale=1)
-
-                with gr.Row():
-                    save_info_btn = gr.Button("Save Info", visible=False)
-                    fav_btn = gr.Button("Toggle Favorite", visible=False)
-                    model_info_btn = gr.Button("📋 Model Info", visible=False, scale=1)
-
-                preview_html = gr.HTML(value="")
 
             # === TAB 2: Favorites ===
             with gr.Tab("Favorites"):
@@ -1329,12 +1348,11 @@ def on_ui_tabs():
                     with gr.Column(scale=1, min_width=200):
                         gr.Markdown("### Folders")
                         folder_tree_html = gr.HTML(value=get_folder_tree_html())
-                        installed_refresh_btn = gr.Button("Scan Installed Models", variant="secondary")
-                    
+                        installed_refresh_btn = gr.Button("Refresh Folder Tree", variant="secondary")
+
                     # Right side: Model cards
                     with gr.Column(scale=4):
-                        installed_html = gr.HTML(value="")
-                        installed_preview_html = gr.HTML(value="", visible=False)
+                        installed_html = gr.HTML(value='<div class="civ-no-results">Select a folder to view models.</div>')
                 
                 # Hidden states for installed model selection
                 installed_model_id_state = gr.Textbox(visible=False, elem_id="civ_installed_model_id")
@@ -1350,7 +1368,7 @@ def on_ui_tabs():
 
         # --- Event Bindings ---
         search_inputs = [search_input, search_type, content_type, base_model_filter,
-                         sort_type, period_type, show_nsfw, cards_per_page]
+                         sort_type, period_type, show_nsfw, cards_per_page, save_local_on_download]
         search_outputs = [model_cards, page_info]
 
         search_btn.click(fn=do_search, inputs=search_inputs, outputs=search_outputs)
@@ -1359,38 +1377,10 @@ def on_ui_tabs():
         prev_btn.click(fn=do_prev_page, inputs=search_inputs, outputs=search_outputs)
         next_btn.click(fn=do_next_page, inputs=search_inputs, outputs=search_outputs)
 
-        # Model selection (triggered from JS via textbox)
+        # Browse card click → open model info popup (triggered from JS via textbox)
         model_select_trigger.change(
-            fn=load_model_details,
-            inputs=[model_select_trigger],
-            outputs=[version_dropdown, install_path_box, download_btn, save_info_btn,
-                     preview_html, model_id_state, model_name_state, model_thumbnail_state]
-        )
-
-        # Show favorite button when model loaded
-        model_id_state.change(fn=do_show_fav_btn, inputs=[model_id_state], outputs=[fav_btn])
-        
-        # Show model info button when model loaded
-        model_id_state.change(fn=do_show_model_info_btn, inputs=[model_id_state], outputs=[model_info_btn])
-
-        # Version change
-        version_dropdown.change(
-            fn=on_version_change,
-            inputs=[version_dropdown, model_id_state],
-            outputs=[file_dropdown, install_path_box]
-        )
-
-        # Download
-        download_btn.click(
-            fn=start_download,
-            inputs=[model_id_state, version_dropdown, file_dropdown, install_path_box, save_local_on_download],
-            outputs=[dl_html]
-        )
-
-        # Model Info button - generate and show model info HTML
-        model_info_btn.click(
             fn=get_model_info_html,
-            inputs=[model_id_state],
+            inputs=[model_select_trigger],
             outputs=[model_info_html]
         )
 
@@ -1425,12 +1415,7 @@ def on_ui_tabs():
         # Output change triggers JS to send to txt2img
         civitai_txt2img_output.change(fn=None, inputs=[civitai_txt2img_output], _js="(genInfo) => genInfo_to_txt2img(genInfo)")
 
-        # Favorites (use Textbox states, NOT gr.HTML as input)
-        fav_btn.click(
-            fn=do_toggle_favorite,
-            inputs=[model_id_state, model_name_state, model_thumbnail_state],
-            outputs=[fav_html, fav_status]
-        )
+        # Favorites
         fav_refresh_btn.click(fn=do_refresh_fav, outputs=[fav_html])
 
         # Save model info locally (triggered by checkbox in popup)
@@ -1442,18 +1427,14 @@ def on_ui_tabs():
             show_progress=False
         )
 
-        # Installed - Initial load
-        installed_html.update(value=get_installed_models_html())
-        
-        # Folder filter change
+        # Installed - Folder click triggers scan + filter
         installed_filter_folder.change(
             fn=get_installed_models_html,
             inputs=[installed_filter_folder],
             outputs=[installed_html]
         )
-        
-        # Installed model selection - use .change() for more reliable triggering
-        # Just update the HTML, JavaScript will handle the popup via MutationObserver
+
+        # Installed model selection → popup
         installed_model_id_state.change(
             fn=get_model_info_html,
             inputs=[installed_model_id_state],
@@ -1461,12 +1442,12 @@ def on_ui_tabs():
             queue=False,
             show_progress=False
         )
-        
-        # Refresh button
+
+        # Refresh folder tree only
         installed_refresh_btn.click(
-            fn=lambda: (get_folder_tree_html(), get_installed_models_html()),
+            fn=get_folder_tree_html,
             inputs=[],
-            outputs=[folder_tree_html, installed_html]
+            outputs=[folder_tree_html]
         )
 
         # Downloads
@@ -1476,7 +1457,19 @@ def on_ui_tabs():
             fn=do_refresh_dl, outputs=[dl_html], queue=False, show_progress=False
         )
 
-    return (civitai_browser, "CivitAI Browser", "civitai_browser_new"),
+        # Force-apply saved config on UI load (some Gradio versions ignore value= for certain widgets)
+        def _apply_saved_config():
+            return (
+                gr.update(value=_saved["search_type"]),
+                gr.update(value=_saved["nsfw"]),
+                gr.update(value=_saved["save_local"]),
+            )
+        civitai_browser.load(
+            fn=_apply_saved_config,
+            outputs=[search_type, show_nsfw, save_local_on_download]
+        )
+
+    return (civitai_browser, "CivitAI Manager Plus", "civitai_browser_new"),
 
 
 script_callbacks.on_ui_tabs(on_ui_tabs)

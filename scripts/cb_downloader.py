@@ -32,13 +32,14 @@ class DownloadItem:
     model_id: int
     sha256: str = ""
     preview_url: str = ""
+    preview_type: str = "image"  # "image" or "video"
     status: str = "queued"  # queued | downloading | completed | failed | cancelled
     progress: float = 0.0
     speed: str = ""
     eta: str = ""
     error: str = ""
     retries: int = 0
-    max_retries: int = 3
+    max_retries: int = 5
 
 
 class DownloadManager:
@@ -52,7 +53,7 @@ class DownloadManager:
         self._running = False
 
     def add(self, url, filename, install_path, model_name, version_name,
-            model_id, sha256="", preview_url="") -> int:
+            model_id, sha256="", preview_url="", preview_type="image") -> int:
         """Add a download to the queue and ensure background processor is running."""
         with self._lock:
             dl_id = self._next_id
@@ -61,7 +62,8 @@ class DownloadManager:
                 dl_id=dl_id, url=url, filename=filename,
                 install_path=install_path, model_name=model_name,
                 version_name=version_name, model_id=model_id,
-                sha256=sha256, preview_url=preview_url
+                sha256=sha256, preview_url=preview_url,
+                preview_type=preview_type
             )
             self._queue.append(item)
         # Auto-start background processor
@@ -202,7 +204,8 @@ class DownloadManager:
                         pass
 
             if attempt < item.max_retries - 1:
-                wait = 2 ** attempt
+                # Longer delay for CDN errors (400/403), shorter for others
+                wait = 5 * (attempt + 1) if '400' in str(item.error) or '403' in str(item.error) else 2 ** attempt
                 item.retries = attempt + 1
                 time.sleep(wait)
 
@@ -356,15 +359,23 @@ class DownloadManager:
             pass
 
     def _save_preview_image(self, item, file_path):
-        """Download and save preview image alongside the model file."""
+        """Download and save preview image/video alongside the model file."""
         if not item.preview_url:
             return
         try:
-            preview_path = os.path.splitext(file_path)[0] + ".preview.png"
+            base = os.path.splitext(file_path)[0]
+            url = item.preview_url
+
+            if item.preview_type == 'video':
+                preview_path = base + ".preview.mp4"
+                url = url.replace("width=", "transcode=true,width=")
+            else:
+                preview_path = base + ".preview.png"
+
             if os.path.exists(preview_path):
                 return
 
-            resp = requests.get(item.preview_url, timeout=(10, 30),
+            resp = requests.get(url, timeout=(10, 60),
                                 headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 with open(preview_path, 'wb') as f:

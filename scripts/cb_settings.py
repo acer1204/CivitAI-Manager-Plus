@@ -1,11 +1,11 @@
-"""CivitAI Browser settings registration for SD WebUI."""
+"""CivitAI Manager Plus settings registration for SD WebUI."""
 
 import gradio as gr
 from modules import shared, script_callbacks
 
 
 def on_ui_settings():
-    section = ("civitai_browser_new", "CivitAI Browser")
+    section = ("civitai_browser_new", "CivitAI Manager Plus")
 
     shared.opts.add_option(
         "civitai_api_key",

@@ -11,28 +11,18 @@ function updateGradioTextbox(selector, value) {
     }
 }
 
-// --- Model Card Click: Load details ---
+// --- Model Card Click: Open model info popup ---
 document.addEventListener('click', function(e) {
-    const card = e.target.closest('.civ-card');
+    const card = e.target.closest('.civ-card:not(.civ-installed-card)');
     if (!card) return;
     if (e.target.closest('.civ-card-checkbox')) return;
 
     const modelId = card.dataset.modelId;
     if (modelId) {
-        const modelSelectInput = document.querySelector('#civ_model_select textarea');
-        if (modelSelectInput) {
-            // Force change by setting a different value first
-            const oldValue = modelSelectInput.value;
-            modelSelectInput.value = modelId + '_reset';
-            modelSelectInput.dispatchEvent(new Event('input', { bubbles: true }));
-            
-            // Small delay then set actual value
-            setTimeout(() => {
-                modelSelectInput.value = modelId;
-                modelSelectInput.dispatchEvent(new Event('input', { bubbles: true }));
-            }, 100);
-        }
-        
+        // Trigger model info popup via the same mechanism as installed cards
+        const randomSuffix = '_' + Math.random().toString(36).substring(2, 8);
+        updateGradioTextbox('#civ_model_select', modelId + randomSuffix);
+
         document.querySelectorAll('.civ-card.civ-selected').forEach(c => c.classList.remove('civ-selected'));
         card.classList.add('civ-selected');
     }
