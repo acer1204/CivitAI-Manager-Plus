@@ -1,0 +1,1473 @@
+"""CivitAI Browser - Main UI for Stable Diffusion WebUI."""
+
+import sys
+import os
+# Add this extension's scripts dir to path for local imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import gradio as gr
+import json
+import random
+import threading
+from modules import script_callbacks, shared
+from modules.paths import models_path
+from cb_api import (
+    CivitAIClient, make_model_cards_html, scan_installed_models,
+    get_model_folder, build_install_path, clean_folder_name,
+    load_favorites, save_favorites, toggle_favorite, CONTENT_TYPE_FOLDERS
+)
+from cb_downloader import DownloadManager, delete_model, _format_size
+
+# Singletons
+api = CivitAIClient()
+dl_manager = DownloadManager()
+
+# State
+_current_page = 1
+_total_pages = 1
+_last_search_items = []   # store search results for Select All
+_selected_model_ids = set()  # track selected model IDs for batch download
+_installed_files = set()
+_installed_hashes = set()
+_page_cursors = {}  # page_number -> nextCursor from that page's response
+
+# Local model info storage - use extension directory for reliability
+_EXT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MODEL_INFO_DIR = os.path.join(_EXT_DIR, "model_info_cache")
+_model_data_cache = {}  # Temporary cache: model_id -> {"model_data": ..., "version_images": ...}
+
+# Search config persistence
+_SEARCH_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "search_config.json")
+
+
+def _save_search_config(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
+    """Save last search configuration to file."""
+    config = {
+        "query": query or "",
+        "search_type": str(search_type) if search_type else "Model name",
+        "content_type": content_type if content_type else [],
+        "base_model": base_model if base_model else [],
+        "sort_type": sort_type or "Highest Rated",
+        "period": period or "AllTime",
+        "nsfw": True if nsfw else False,
+        "cards_per_page": int(cards_per_page) if cards_per_page else 20
+    }
+    try:
+        with open(_SEARCH_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _load_search_config():
+    """Load last search configuration from file."""
+    defaults = {
+        "query": "",
+        "search_type": "Model name",
+        "content_type": None,
+        "base_model": None,
+        "sort_type": "Highest Rated",
+        "period": "AllTime",
+        "nsfw": getattr(shared.opts, "civitai_default_nsfw", False),
+        "cards_per_page": 20
+    }
+    try:
+        if os.path.exists(_SEARCH_CONFIG_FILE):
+            with open(_SEARCH_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            for key in defaults:
+                if key in config:
+                    defaults[key] = config[key]
+            # Normalize empty lists to None for multiselect dropdowns
+            if not defaults["content_type"]:
+                defaults["content_type"] = None
+            if not defaults["base_model"]:
+                defaults["base_model"] = None
+    except Exception as e:
+        print(f"[DEBUG] Failed to load search config: {e}", file=sys.stderr)
+    return defaults
+
+
+def _download_image(url, local_path):
+    """Download a single image. Returns True on success."""
+    try:
+        resp = api.session.get(url, timeout=30)
+        if resp.status_code == 200:
+            with open(local_path, 'wb') as f:
+                f.write(resp.content)
+            return True
+    except Exception as e:
+        print(f"[DEBUG] Failed to download {url}: {e}", file=sys.stderr)
+    return False
+
+
+def _localize_description_images(desc_html, images_dir):
+    """Download images embedded in description HTML and replace URLs with local paths."""
+    import re
+    if not desc_html:
+        return desc_html
+
+    img_urls = re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', desc_html, re.IGNORECASE)
+    for i, url in enumerate(img_urls):
+        if not url.startswith('http'):
+            continue
+        filename = f"desc_{i}.jpeg"
+        local_path = os.path.join(images_dir, filename)
+        if _download_image(url, local_path):
+            desc_html = desc_html.replace(url, f"/file={local_path}")
+
+    return desc_html
+
+
+def _save_model_info_local(model_id):
+    """Save model info + download ALL images (preview + description) to local storage."""
+    if model_id not in _model_data_cache:
+        print(f"[DEBUG] Save local: model {model_id} not in memory cache", file=sys.stderr)
+        return False
+
+    cache = _model_data_cache[model_id]
+    model_dir = os.path.join(_MODEL_INFO_DIR, str(model_id))
+    images_dir = os.path.join(model_dir, "images")
+    os.makedirs(images_dir, exist_ok=True)
+
+    # 1. Download all preview images and build version_images with local paths
+    version_images = cache.get("version_images", {})
+    saved_version_images = {}
+    downloaded = 0
+
+    for vid_str, images in version_images.items():
+        saved_imgs = []
+        for i, img in enumerate(images):
+            saved_img = dict(img)  # shallow copy
+            url = img.get("url", "")
+            img_id = img.get("id", i)
+            img_type = img.get("type", "image")
+
+            if url and img_type != "video":
+                filename = f"{vid_str}_{img_id}.jpeg"
+                local_path = os.path.join(images_dir, filename)
+                if _download_image(url, local_path):
+                    saved_img["local_path"] = local_path
+                    downloaded += 1
+
+            saved_imgs.append(saved_img)
+        saved_version_images[vid_str] = saved_imgs
+
+    # 2. Download description images and localize HTML
+    model_data_copy = dict(cache["model_data"])
+    desc = model_data_copy.get("description", "")
+    if desc:
+        model_data_copy["description"] = _localize_description_images(desc, images_dir)
+
+    # 3. Save JSON
+    from datetime import datetime
+    save_data = {
+        "model_id": model_id,
+        "saved_at": datetime.now().isoformat(),
+        "model_data": model_data_copy,
+        "version_images": saved_version_images
+    }
+    filepath = os.path.join(model_dir, "info.json")
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(save_data, f, ensure_ascii=False, indent=2)
+        print(f"[DEBUG] Saved model {model_id} locally: {downloaded} preview images + description images", file=sys.stderr)
+        return True
+    except Exception as e:
+        print(f"[DEBUG] Failed to save model {model_id}: {e}", file=sys.stderr)
+        return False
+
+
+def _load_model_info_local(model_id):
+    """Load model info from local storage. Returns (model_data, version_images) or None."""
+    filepath = os.path.join(_MODEL_INFO_DIR, str(model_id), "info.json")
+    if not os.path.exists(filepath):
+        return None
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        model_data = data.get("model_data")
+        if not model_data:
+            return None
+        return model_data, data.get("version_images", {})
+    except Exception:
+        return None
+
+
+def _ensure_model_info_cached(model_id):
+    """Ensure model data is in memory cache (fetch from API if needed). Returns True if cached."""
+    if model_id in _model_data_cache:
+        return True
+    data = api.get_model(model_id)
+    if not data:
+        return False
+    versions = data.get("modelVersions", [])
+    version_images_cache = {}
+    for v in versions[:5]:
+        vid = v.get('id', '')
+        if vid:
+            try:
+                vdata = api.get_model_version(vid)
+                if vdata:
+                    version_images_cache[str(vid)] = vdata.get('images', [])
+            except Exception:
+                pass
+            if str(vid) not in version_images_cache:
+                version_images_cache[str(vid)] = v.get('images', [])
+    _model_data_cache[model_id] = {"model_data": data, "version_images": version_images_cache}
+    return True
+
+
+def _delete_model_info_local(model_id):
+    """Delete local model info directory (JSON + images)."""
+    import shutil
+    model_dir = os.path.join(_MODEL_INFO_DIR, str(model_id))
+    try:
+        if os.path.exists(model_dir):
+            shutil.rmtree(model_dir)
+            print(f"[DEBUG] Deleted local model info for {model_id}", file=sys.stderr)
+    except Exception as e:
+        print(f"[DEBUG] Failed to delete model info {model_id}: {e}", file=sys.stderr)
+
+
+BASE_MODELS = [
+    "SD 1.4", "SD 1.5", "SD 1.5 LCM", "SD 1.5 Hyper",
+    "SD 2.0", "SD 2.1",
+    "SDXL 0.9", "SDXL 1.0", "SDXL 1.0 LCM", "SDXL Turbo", "SDXL Lightning", "SDXL Hyper",
+    "SD 3", "SD 3.5", "SD 3.5 Medium", "SD 3.5 Large",
+    "Pony", "Illustrious", "NoobAI",
+    "Flux.1 S", "Flux.1 D",
+    "Stable Cascade", "SVD", "SVD XT",
+    "Hunyuan 1", "Kolors", "AuraFlow",
+    "Other"
+]
+
+CONTENT_TYPES = list(CONTENT_TYPE_FOLDERS.keys())
+
+SORT_OPTIONS = ["Highest Rated", "Most Downloaded", "Most Liked", "Most Buzz",
+                "Most Discussed", "Most Collected", "Most Images", "Newest"]
+
+PERIOD_OPTIONS = ["AllTime", "Year", "Month", "Week", "Day"]
+
+
+def _refresh_installed():
+    """Refresh installed models cache."""
+    global _installed_files, _installed_hashes
+    _installed_files, _installed_hashes = scan_installed_models()
+
+
+# --- Search & Browse ---
+
+def _do_search_internal(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, page):
+    """Internal search that stores results."""
+    global _current_page, _total_pages, _last_search_items, _page_cursors
+
+    _current_page = page
+
+    # Use cursor for page > 1 if available (CivitAI uses cursor-based pagination)
+    cursor = _page_cursors.get(page - 1) if page > 1 else None
+
+    result = api.search_models(
+        query=query, search_type=search_type,
+        content_type=content_type if content_type else None,
+        base_model=base_model if base_model else None,
+        sort=sort_type, period=period,
+        page=page, limit=int(cards_per_page), nsfw=nsfw,
+        cursor=cursor
+    )
+
+    if "error" in result:
+        _last_search_items = []
+        return f'<div class="civ-error">Error: {result["error"]}</div>', f"Page {page} / 1"
+
+    meta = result.get("metadata", {})
+
+    # Save cursor for next page navigation
+    next_cursor = meta.get("nextCursor")
+    if next_cursor:
+        _page_cursors[page] = next_cursor
+
+    _total_pages = meta.get("totalPages", 0)
+    if not _total_pages:
+        if next_cursor or meta.get("nextPage"):
+            _total_pages = page + 1  # At least one more page
+        else:
+            _total_pages = page  # This is the last page
+
+    items = result.get("items", [])
+    _last_search_items = items
+
+    html = make_model_cards_html(items, _installed_hashes, _installed_files)
+
+    page_display = f"Page {_current_page} / {_total_pages}" if meta.get("totalPages") else f"Page {_current_page}"
+    return html, page_display
+
+
+def do_search(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
+    global _page_cursors
+    _page_cursors = {}  # Reset cursors for new search
+    _refresh_installed()
+    _save_search_config(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page)
+    return _do_search_internal(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, 1)
+
+
+def do_page(direction, query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
+    page = _current_page
+    if direction == "next" and page < _total_pages:
+        page += 1
+    elif direction == "prev" and page > 1:
+        page -= 1
+    return _do_search_internal(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, page)
+
+
+# --- Model Details ---
+
+def load_model_details(model_id_str):
+    """Load model details when a card is clicked."""
+    if not model_id_str:
+        # Return 8 updates to match the outputs
+        return [gr.update()] * 8
+
+    try:
+        model_id = int(model_id_str)
+    except (ValueError, TypeError):
+        return [gr.update()] * 8
+
+    data = api.get_model(model_id)
+    if not data:
+        return [gr.update()] * 8
+
+    model_name = data.get("name", "Unknown")
+    creator = data.get("creator", {}).get("username", "Unknown")
+    content_type = data.get("type", "")
+    nsfw = data.get("nsfw", False)
+    versions = data.get("modelVersions", [])
+
+    version_names = [v.get("name", "Unknown") for v in versions]
+    version_value = version_names[0] if version_names else None
+
+    # Build path
+    auto_organize = getattr(shared.opts, "civitai_auto_organize", True)
+    base_model = versions[0].get("baseModel", "") if versions else ""
+    install_path = build_install_path(content_type, base_model, creator, model_name, auto_organize)
+
+    # Preview HTML
+    preview_parts = [f'<div class="civ-preview">']
+    preview_parts.append(f'<h2>{model_name}</h2>')
+    preview_parts.append(f'<p>by <b>{creator}</b> | {content_type} | {base_model}</p>')
+
+    desc = data.get("description", "")
+    if desc:
+        preview_parts.append(f'<div class="civ-description">{desc}</div>')
+
+    # Sample images
+    if versions:
+        imgs = versions[0].get("images", [])
+        if imgs:
+            preview_parts.append('<div class="civ-sample-images">')
+            for img in imgs[:8]:
+                url = img.get("url", "")
+                if img.get("type") == "video":
+                    url = url.replace("width=", "transcode=true,width=")
+                    preview_parts.append(f'<video controls muted playsinline style="max-width:300px"><source src="{url}" type="video/mp4"></video>')
+                else:
+                    preview_parts.append(f'<img loading="lazy" src="{url}" style="max-width:300px;border-radius:8px;margin:4px">')
+            preview_parts.append('</div>')
+
+    preview_parts.append('</div>')
+    preview_html = ''.join(preview_parts)
+
+    # Extract thumbnail URL
+    thumbnail = ""
+    if versions:
+        imgs = versions[0].get("images", [])
+        if imgs:
+            thumbnail = imgs[0].get("url", "")
+
+    return (
+        gr.update(choices=version_names, value=version_value, visible=True),  # 1. versions dropdown
+        gr.update(value=install_path, visible=True),  # 2. install path
+        gr.update(visible=True),  # 3. download btn
+        gr.update(visible=True),  # 4. save info btn
+        gr.update(value=preview_html),  # 5. preview html
+        gr.update(value=str(model_id)),  # 6. model_id state
+        gr.update(value=model_name),  # 7. model_name state
+        gr.update(value=thumbnail),  # 8. thumbnail state
+    )
+
+
+def do_show_model_info_btn(model_id_str):
+    """Show model info button when model is selected."""
+    return gr.update(visible=bool(model_id_str))
+
+
+def on_version_change(version_name, model_id_str):
+    """Update file info when version changes."""
+    if not model_id_str:
+        return gr.update(), gr.update()
+
+    data = api.get_model(int(model_id_str))
+    if not data:
+        return gr.update(), gr.update()
+
+    for v in data.get("modelVersions", []):
+        if v.get("name") == version_name:
+            files = v.get("files", [])
+            file_names = []
+            for f in files:
+                size = _format_size(f.get("sizeKB", 0) * 1024)
+                fmt = f.get("metadata", {}).get("format", "")
+                file_names.append(f"{f.get('name', '')} ({size}, {fmt})")
+
+            base_model = v.get("baseModel", "")
+            creator = data.get("creator", {}).get("username", "Unknown")
+            auto_organize = getattr(shared.opts, "civitai_auto_organize", True)
+            path = build_install_path(data.get("type", ""), base_model, creator, data.get("name", ""), auto_organize)
+
+            return (
+                gr.update(choices=file_names, value=file_names[0] if file_names else None, visible=True),
+                gr.update(value=path),
+            )
+
+    return gr.update(), gr.update()
+
+
+# --- Select All / Download Selected ---
+
+def do_select_all():
+    """Toggle select all — if any selected, deselect all; otherwise select all non-installed models."""
+    global _selected_model_ids
+    
+    if _selected_model_ids:
+        _selected_model_ids.clear()
+    else:
+        # Only select non-installed models
+        for item in _last_search_items:
+            if item.get("modelVersions"):
+                model_id = str(item.get("id", ""))
+                # Check if this model is installed
+                is_installed = False
+                for v in item.get("modelVersions", []):
+                    for f in v.get("files", []):
+                        sha = f.get("hashes", {}).get("SHA256", "").upper()
+                        if sha and sha in _installed_hashes:
+                            is_installed = True
+                            break
+                    if is_installed:
+                        break
+                
+                if not is_installed:
+                    _selected_model_ids.add(model_id)
+    
+    # Return updated cards HTML with selection state
+    html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids)
+    status = f"Selected {len(_selected_model_ids)} models" if _selected_model_ids else "Deselected all"
+    return gr.update(value=html), status
+
+
+def _extract_model_id_from_card(card_html):
+    """Extract model ID from card HTML data attribute."""
+    import re
+    match = re.search(r'data-model-id="(\d+)"', card_html)
+    return match.group(1) if match else None
+
+
+def do_download_selected(save_local_info=False):
+    """Download all selected models."""
+    global _selected_model_ids
+
+    if not _selected_model_ids:
+        return gr.update(value='<div class="civ-dl-empty">No models selected</div>'), ""
+
+    model_ids = list(_selected_model_ids)
+    auto_organize = getattr(shared.opts, "civitai_auto_organize", True)
+    added = 0
+    save_local_ids = []
+
+    for mid in model_ids:
+        try:
+            data = api.get_model(int(mid))
+            if not data:
+                continue
+
+            model_name = data.get("name", "Unknown")
+            content_type = data.get("type", "")
+            creator = data.get("creator", {}).get("username", "Unknown")
+            versions = data.get("modelVersions", [])
+            if not versions:
+                continue
+
+            version = versions[0]
+            version_name = version.get("name", "")
+            base_model = version.get("baseModel", "")
+            files = version.get("files", [])
+            primary = next((f for f in files if f.get("primary")), files[0] if files else None)
+            if not primary:
+                continue
+
+            install_path = build_install_path(content_type, base_model, creator, model_name, auto_organize)
+
+            # Get preview image URL
+            preview_url = ""
+            images = version.get("images", [])
+            if images:
+                preview_url = images[0].get("url", "")
+
+            dl_manager.add(
+                url=primary.get("downloadUrl", ""),
+                filename=primary.get("name", "model.safetensors"),
+                install_path=install_path,
+                model_name=model_name,
+                version_name=version_name,
+                model_id=int(mid),
+                sha256=primary.get("hashes", {}).get("SHA256", ""),
+                preview_url=preview_url
+            )
+            added += 1
+            if save_local_info:
+                save_local_ids.append(int(mid))
+        except Exception:
+            continue
+
+    # Clear selection after starting download
+    _selected_model_ids.clear()
+
+    if added > 0:
+        # Yield progress after each download
+        yield gr.update(value=dl_manager.get_status_html()), f"Started downloading {added} models"
+
+        # Process download with incremental progress updates
+        import time
+        has_more = True
+        while has_more:
+            has_more, _ = dl_manager.process_one_step()
+            yield gr.update(value=dl_manager.get_status_html()), ""
+            time.sleep(0.3)
+
+        _refresh_installed()
+
+        # Save model info locally for selected models (after downloads queued)
+        if save_local_ids:
+            for mid in save_local_ids:
+                try:
+                    if _ensure_model_info_cached(mid):
+                        _save_model_info_local(mid)
+                except Exception as e:
+                    print(f"[DEBUG] Failed to save local info for {mid}: {e}", file=sys.stderr)
+            yield gr.update(value=dl_manager.get_status_html()), f"Saved {len(save_local_ids)} model info locally"
+
+    yield gr.update(value=dl_manager.get_status_html()), ""
+
+
+# --- Download ---
+
+def start_download(model_id_str, version_name, file_index_str, install_path, save_local_info=False):
+    """Start downloading a model with live progress."""
+    if not model_id_str:
+        yield gr.update()
+        return
+
+    data = api.get_model(int(model_id_str))
+    if not data:
+        yield gr.update(value='<div class="civ-error">Model not found</div>')
+        return
+
+    model_name = data.get("name", "Unknown")
+    content_type = data.get("type", "")
+    creator = data.get("creator", {}).get("username", "Unknown")
+
+    for v in data.get("modelVersions", []):
+        if v.get("name") == version_name:
+            files = v.get("files", [])
+            if not files:
+                break
+
+            file_idx = 0
+            if file_index_str:
+                for i, f in enumerate(files):
+                    size = _format_size(f.get("sizeKB", 0) * 1024)
+                    fmt = f.get("metadata", {}).get("format", "")
+                    if f"{f.get('name', '')} ({size}, {fmt})" == file_index_str:
+                        file_idx = i
+                        break
+
+            file_data = files[file_idx]
+            dl_url = file_data.get("downloadUrl", "")
+            filename = file_data.get("name", "model.safetensors")
+            sha256 = file_data.get("hashes", {}).get("SHA256", "")
+
+            preview_url = ""
+            images = v.get("images", [])
+            if images:
+                preview_url = images[0].get("url", "")
+
+            os.makedirs(install_path, exist_ok=True)
+
+            dl_manager.add(
+                url=dl_url, filename=filename, install_path=install_path,
+                model_name=model_name, version_name=version_name,
+                model_id=int(model_id_str), sha256=sha256,
+                preview_url=preview_url
+            )
+
+            # Yield queue status then process with progress
+            yield gr.update(value=dl_manager.get_status_html())
+            
+            # Process download with incremental progress updates
+            import time
+            has_more = True
+            while has_more:
+                has_more, html = dl_manager.process_one_step()
+                yield gr.update(value=html)
+                time.sleep(0.3)  # Update every 300ms
+
+            _refresh_installed()
+
+            # Save model info locally if requested
+            if save_local_info:
+                try:
+                    mid = int(model_id_str)
+                    if _ensure_model_info_cached(mid):
+                        _save_model_info_local(mid)
+                        print(f"[DEBUG] Saved local info for model {mid}", file=sys.stderr)
+                except Exception as e:
+                    print(f"[DEBUG] Failed to save local info: {e}", file=sys.stderr)
+
+            yield gr.update(value=dl_manager.get_status_html())
+            return
+
+    yield gr.update(value='<div class="civ-error">Version not found</div>')
+
+
+# --- Favorites Tab ---
+
+def get_favorites_html():
+    """Generate HTML for favorites display."""
+    favs = load_favorites()
+    if not favs:
+        return '<div class="civ-no-results">No favorites yet. Click the star on a model to add it.</div>'
+
+    parts = ['<div class="civ-card-grid">']
+    for fav in favs:
+        thumb = fav.get("thumbnail", "")
+        name = fav.get("name", "Unknown")
+        display_name = name[:35] + "..." if len(name) > 35 else name
+        esc_name = name.replace('"', '&quot;')
+        mid = fav.get("model_id", "")
+        img = f'<img class="civ-card-media" loading="lazy" src="{thumb}">' if thumb else '<div class="civ-card-no-img">No Preview</div>'
+
+        parts.append(f'''<div class="civ-card civ-fav-card" data-model-id="{mid}" data-model-name="{esc_name}">
+            {img}
+            <div class="civ-card-name" title="{esc_name}">{display_name}</div>
+            <div class="civ-card-meta">{fav.get("type", "")}</div>
+        </div>''')
+
+    parts.append('</div>')
+    return ''.join(parts)
+
+
+def do_toggle_favorite(model_id_str, model_name, thumbnail):
+    """Add/remove from favorites."""
+    if not model_id_str:
+        return gr.update(), "No model selected"
+
+    _, was_added = toggle_favorite(model_id_str, model_name, "", thumbnail or "")
+    status = f"{'Added' if was_added else 'Removed'}: {model_name}"
+    return gr.update(value=get_favorites_html()), status
+
+
+def do_prev_page(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
+    return do_page("prev", query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page)
+
+
+def do_next_page(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page):
+    return do_page("next", query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page)
+
+
+def do_refresh_fav():
+    return gr.update(value=get_favorites_html())
+
+
+def do_refresh_installed():
+    return gr.update(value=get_installed_models_html())
+
+
+def do_refresh_dl():
+    return gr.update(value=dl_manager.get_status_html())
+
+
+def do_clear_dl():
+    dl_manager.clear_finished()
+    return gr.update(value=dl_manager.get_status_html())
+
+
+def do_show_fav_btn(model_id_str):
+    return gr.update(visible=bool(model_id_str))
+
+
+def do_toggle_card_selection(model_id_str):
+    """Toggle selection state for a single model card."""
+    global _selected_model_ids
+    
+    if not model_id_str:
+        return gr.update(value=get_favorites_html())
+    
+    model_id_str = str(model_id_str)
+    if model_id_str in _selected_model_ids:
+        _selected_model_ids.discard(model_id_str)
+    else:
+        _selected_model_ids.add(model_id_str)
+    
+    # Re-render cards with updated selection
+    html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids)
+    return gr.update(value=html)
+
+
+def get_model_info_html(model_id_str):
+    """Generate detailed model info HTML for popup window with two tabs."""
+    import sys
+    import gradio as gr
+    
+    # Debug logging - show EVERY call
+    print(f"\n{'='*60}", file=sys.stderr)
+    print(f"[DEBUG] === get_model_info_html CALLED ===", file=sys.stderr)
+    print(f"[DEBUG] Input model_id_str: '{model_id_str}'", file=sys.stderr)
+    print(f"[DEBUG] Input type: {type(model_id_str)}", file=sys.stderr)
+    print(f"[DEBUG] Input is empty: {not model_id_str}", file=sys.stderr)
+    
+    # Ignore empty strings - return gr.update() to keep current state
+    if not model_id_str or str(model_id_str).strip() == '':
+        print(f"[DEBUG] Ignoring empty value", file=sys.stderr)
+        print(f"[DEBUG] Returning gr.update()", file=sys.stderr)
+        return gr.update()  # Keep current HTML, don't show error
+    
+    # Clean the model ID string - handle format: "modelId_randomSuffix" or just "modelId"
+    model_id_str = str(model_id_str)
+    if '_' in model_id_str:
+        # Extract model ID from format like "2428747_abc123"
+        model_id_clean = model_id_str.split('_')[0]
+    else:
+        # Fallback: extract only digits
+        model_id_clean = ''.join(c for c in model_id_str if c.isdigit())
+    
+    print(f"[DEBUG] Cleaned model_id: '{model_id_clean}'", file=sys.stderr)
+    
+    if not model_id_clean:
+        print(f"[DEBUG] No digits found in model_id_str", file=sys.stderr)
+        return gr.update()  # Keep current HTML
+    
+    try:
+        model_id = int(model_id_clean)
+    except (ValueError, TypeError) as e:
+        print(f"[DEBUG] Failed to convert to int: {e}", file=sys.stderr)
+        return gr.update(value='<div class="civ-error">Invalid model ID</div>')
+
+    # Check local cache first
+    is_local = False
+    version_images_cache = {}
+    local_info = _load_model_info_local(model_id)
+
+    if local_info:
+        data, version_images_cache = local_info
+        is_local = True
+        print(f"[DEBUG] Loaded model {model_id} from local cache", file=sys.stderr)
+    else:
+        print(f"[DEBUG] Fetching model {model_id} from CivitAI...", file=sys.stderr)
+        data = api.get_model(model_id)
+        if not data:
+            print(f"[DEBUG] Model {model_id} not found", file=sys.stderr)
+            return gr.update(value='<div class="civ-error">Model not found</div>')
+
+    print(f"[DEBUG] Model: {data.get('name', 'Unknown')} (source: {'local' if is_local else 'online'})", file=sys.stderr)
+    print(f"[DEBUG] Generating HTML...", file=sys.stderr)
+    
+    model_name = data.get("name", "Unknown")
+    creator = data.get("creator", {}).get("username", "Unknown")
+    content_type = data.get("type", "")
+    nsfw = data.get("nsfw", False)
+    versions = data.get("modelVersions", [])
+    
+    # Build CivitAI URL
+    civitai_url = f"https://civitai.com/models/{model_id}"
+    
+    parts = [f'<div class="civ-model-info">']
+
+    # Source indicator and save checkbox
+    source_class = 'local' if is_local else 'online'
+    source_label = '📁 Local' if is_local else '🌐 Online'
+    checked_attr = 'checked' if is_local else ''
+
+    # Header with clickable title
+    parts.append(f'''<div class="civ-model-header">
+        <h2 class="civ-model-title">
+            <a href="{civitai_url}" target="_blank" class="civ-model-link" title="Open on CivitAI">
+                {model_name} 🔗
+            </a>
+        </h2>
+        <div class="civ-header-actions">
+            <span class="civ-data-source civ-source-{source_class}">{source_label}</span>
+            <label class="civ-save-local-label">
+                <input type="checkbox" class="civ-save-local-checkbox" data-model-id="{model_id}" {checked_attr}> 💾 Save Local
+            </label>
+        </div>
+        <span class="civ-model-meta">by <b>{creator}</b> | {content_type}</span>
+    </div>''')
+
+    # Tab navigation buttons (at top for better UX)
+    parts.append('''<div class="civ-tab-nav">
+        <button class="civ-tab-btn civ-tab-btn-active" data-tab-target="description">📖 Description</button>
+        <button class="civ-tab-btn" data-tab-target="images">🖼️ Preview Images</button>
+    </div>''')
+
+    # Tabs container
+    parts.append('<div class="civ-model-tabs">')
+    
+    # Tab 1: Model Description & Info (visible by default)
+    parts.append('<div class="civ-tab-content civ-tab-description" id="civ-tab-description">')
+    parts.append('<div class="civ-tab-header"><h3>📖 Model Description</h3></div>')
+    
+    # Model description
+    desc = data.get("description", "")
+    if desc:
+        parts.append(f'<div class="civ-model-description">{desc}</div>')
+    else:
+        parts.append('<div class="civ-model-description"><em>No description available.</em></div>')
+    
+    parts.append('</div>')  # End Tab 1 (Description)
+    
+    # Tab 2: Preview Images (hidden by default)
+    parts.append('<div class="civ-tab-content civ-tab-images" id="civ-tab-images" style="display:none;">')
+    parts.append('<div class="civ-tab-header"><h3>🖼️ Preview Images</h3></div>')
+    
+    # Sample images with metadata - list view layout
+    parts.append('<div class="civ-model-versions">')
+    
+    if versions:
+        for v in versions[:5]:  # Limit to 5 versions
+            version_name = v.get("name", "")
+            base_model = v.get("baseModel", "")
+            version_id = v.get('id', '')
+
+            # Get images - use local cache if available, otherwise fetch from API
+            images = []
+            vid_str = str(version_id)
+            if vid_str in version_images_cache:
+                images = version_images_cache[vid_str]
+            elif version_id:
+                try:
+                    version_data = api.get_model_version(version_id)
+                    if version_data:
+                        images = version_data.get('images', [])
+                except Exception:
+                    pass
+
+            # Fallback to search result images
+            if not images:
+                images = v.get('images', [])
+
+            # Store in cache for potential local save
+            if version_id:
+                version_images_cache[vid_str] = images
+
+            # If still no images, skip this version
+            if not images:
+                continue
+
+            parts.append(f'<div class="civ-version-block">')
+            parts.append(f'<h4 class="civ-version-title">{version_name} <span class="civ-base-model">{base_model}</span></h4>')
+
+            # Sample images with metadata - list view layout
+            parts.append('<div class="civ-version-images-list">')
+            for img in images:
+                url = img.get("url", "")
+                img_id = img.get("id", "")
+                img_type = img.get("type", "image")
+
+                # Use local image path if available and file exists
+                local_path = img.get("local_path", "")
+                if is_local and local_path and os.path.exists(local_path):
+                    url = f"/file={local_path}"
+
+                # Get metadata from image
+                img_meta_raw = img.get('meta')
+                prompt_text = ''
+                neg_prompt_text = ''
+
+                if img_meta_raw:
+                    try:
+                        if isinstance(img_meta_raw, str):
+                            img_meta = json.loads(img_meta_raw)
+                        else:
+                            img_meta = img_meta_raw
+
+                        if isinstance(img_meta, dict):
+                            prompt_text = img_meta.get('prompt', '') or ''
+                            neg_prompt_text = img_meta.get('negativePrompt', '') or ''
+                    except Exception:
+                        pass
+
+                if img_type == "video":
+                    video_url = img.get("url", "").replace("width=", "transcode=true,width=")
+                    parts.append(f'<div class="civ-sample-item-list"><video class="civ-sample-media" controls muted playsinline><source src="{video_url}" type="video/mp4"></video></div>')
+                else:
+                    prompt_escaped = prompt_text.replace(chr(34), "&quot;").replace(chr(10), "&#10;") if prompt_text else ''
+                    neg_prompt_escaped = neg_prompt_text.replace(chr(34), "&quot;").replace(chr(10), "&#10;") if neg_prompt_text else ''
+
+                    # Build generation info string for Send to txt2img
+                    geninfo_lines = []
+                    if prompt_text:
+                        geninfo_lines.append(prompt_text)
+                    if neg_prompt_text:
+                        geninfo_lines.append(f"Negative prompt: {neg_prompt_text}")
+                    if isinstance(img_meta_raw, dict) if not isinstance(img_meta_raw, str) else False:
+                        _m = img_meta_raw
+                    elif img_meta_raw:
+                        try:
+                            _m = json.loads(img_meta_raw) if isinstance(img_meta_raw, str) else {}
+                        except Exception:
+                            _m = {}
+                    else:
+                        _m = {}
+                    params = []
+                    if _m.get('steps'): params.append(f"Steps: {_m['steps']}")
+                    if _m.get('sampler'): params.append(f"Sampler: {_m['sampler']}")
+                    if _m.get('cfgScale'): params.append(f"CFG scale: {_m['cfgScale']}")
+                    if _m.get('seed'): params.append(f"Seed: {_m['seed']}")
+                    if _m.get('Size'): params.append(f"Size: {_m['Size']}")
+                    elif _m.get('width') and _m.get('height'): params.append(f"Size: {_m['width']}x{_m['height']}")
+                    if _m.get('Model'): params.append(f"Model: {_m['Model']}")
+                    if _m.get('clipSkip'): params.append(f"Clip skip: {_m['clipSkip']}")
+                    if params:
+                        geninfo_lines.append(", ".join(params))
+                    geninfo_str = chr(10).join(geninfo_lines)
+                    geninfo_escaped = geninfo_str.replace(chr(34), "&quot;").replace(chr(10), "&#10;") if geninfo_str else ''
+
+                    parts.append(f'''<div class="civ-sample-item-list" data-img-url="{url}">
+                        <div class="civ-sample-img-container">
+                            <img class="civ-sample-img-list" loading="lazy" src="{url}" data-url="{url}">
+                        </div>
+                        <div class="civ-sample-prompts">
+                            <div class="civ-prompt-block">
+                                <div class="civ-prompt-label">Prompt <button class="civ-copy-btn" data-copy-type="prompt" data-copy="{prompt_escaped}">📋 Copy</button></div>
+                                <div class="civ-prompt-text">{prompt_text if prompt_text else '<span class="civ-no-prompt">No prompt data</span>'}</div>
+                            </div>
+                            <div class="civ-prompt-block">
+                                <div class="civ-prompt-label">Negative prompt <button class="civ-copy-btn" data-copy-type="negative" data-copy="{neg_prompt_escaped}">📋 Copy</button></div>
+                                <div class="civ-prompt-text">{neg_prompt_text if neg_prompt_text else '<span class="civ-no-prompt">No negative prompt data</span>'}</div>
+                            </div>
+                        </div>
+                        <div class="civ-sample-actions">
+                            <button class="civ-send-txt2img-btn" data-geninfo="{geninfo_escaped}" title="Send all to txt2img">📤 Send</button>
+                        </div>
+                    </div>''')
+            parts.append('</div>')  # End version-images-list
+            parts.append('</div>')  # End version-block
+    
+    parts.append('</div>')  # End model-versions
+    parts.append('</div>')  # End Tab 2 (Images)
+    parts.append('</div>')  # End tabs container
+    parts.append('</div>')  # End main container
+    
+    html_output = ''.join(parts)
+
+    # Cache the data in memory for potential local save
+    _model_data_cache[model_id] = {
+        "model_data": data,
+        "version_images": version_images_cache
+    }
+
+    # Debug: Count tabs and images
+    tab_desc_count = html_output.count('civ-tab-description')
+    tab_img_count = html_output.count('civ-tab-images')
+    img_count = html_output.count('civ-sample-item-list')
+    print(f"[DEBUG] Generated HTML - Description tabs: {tab_desc_count}, Image tabs: {tab_img_count}, Images: {img_count}", file=sys.stderr)
+    print(f"[DEBUG] === get_model_info_html COMPLETE ===", file=sys.stderr)
+    print(f"{'='*60}\n", file=sys.stderr)
+    
+    # Add data attribute to trigger popup (include timestamp to ensure Gradio always re-renders)
+    import time
+    html_with_trigger = html_output.replace('<div class="civ-model-info">', f'<div class="civ-model-info" data-auto-popup="true" data-popup-ts="{int(time.time() * 1000)}">')
+    
+    # Log the first 200 chars of HTML for debugging
+    print(f"[DEBUG] HTML preview: {html_with_trigger[:200]}...", file=sys.stderr)
+    
+    # Return as gr.update to ensure proper rendering
+    return gr.update(value=html_with_trigger)
+
+
+def fetch_and_send_image_metadata(image_url):
+    """Fetch image metadata and send to txt2img."""
+    geninfo = api.get_image_metadata(image_url)
+    
+    if geninfo:
+        # read_info_from_image may return tuple (geninfo, items)
+        if isinstance(geninfo, tuple):
+            geninfo = geninfo[0]
+        
+        # Add random number prefix like the original implementation
+        import random
+        nr = str(random.randint(0, 999)).zfill(3) + "."
+        full_info = nr + str(geninfo)
+        return gr.update(value=full_info)
+    else:
+        return gr.update(value="")
+
+
+# --- Installed Models Tab ---
+
+def get_installed_models_html(filter_folder=""):
+    """Scan and display installed models as cards with preview."""
+    _refresh_installed()
+
+    from cb_api import scan_installed_civitai_models, make_installed_cards_html
+
+    installed_models, folders = scan_installed_civitai_models()
+
+    # Filter by folder if specified - match folder path starting with selected folder
+    if filter_folder:
+        filter_folder_normalized = filter_folder.replace('\\', '/')
+        installed_models = [
+            m for m in installed_models 
+            if m.get('folder', '').replace('\\', '/').startswith(filter_folder_normalized)
+        ]
+
+    # Fetch thumbnails for models with CivitAI ID
+    for model in installed_models:
+        if model.get('civitai_model_id') and not model.get('thumbnail'):
+            try:
+                data = api.get_model(model['civitai_model_id'])
+                if data:
+                    versions = data.get('modelVersions', [])
+                    if versions:
+                        images = versions[0].get('images', [])
+                        if images:
+                            model['thumbnail'] = images[0].get('url', '')
+            except Exception:
+                pass
+    
+    return make_installed_cards_html(installed_models)
+
+
+def get_folder_tree_html():
+    """Generate HTML for folder tree navigation."""
+    from cb_api import scan_installed_civitai_models
+    
+    installed_models, _ = scan_installed_civitai_models()
+    
+    # Build folder tree structure
+    folder_tree = {}
+    for model in installed_models:
+        folder = model.get('folder', '')
+        if folder:
+            # Normalize path separators
+            folder = folder.replace('\\', '/')
+            parts = folder.split('/')
+            
+            # Build nested structure
+            current = folder_tree
+            for part in parts:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+    
+    def render_folder_tree(tree, indent=0, path=''):
+        """Recursively render folder tree as HTML."""
+        html_parts = []
+        
+        for folder_name, sub_tree in sorted(tree.items()):
+            full_path = f"{path}/{folder_name}" if path else folder_name
+            indent_class = f"civ-folder-subitem" if indent > 0 else "civ-folder-item"
+            indent_style = f"padding-left: {indent * 16 + 12}px;" if indent > 0 else ""
+            
+            # Folder item
+            html_parts.append(
+                f'<div class="{indent_class}" data-folder="{full_path.replace(chr(34), "&quot;")}" '
+                f'style="{indent_style}">{"📁 " if indent == 0 else "📄 "}{folder_name}</div>'
+            )
+            
+            # Render subfolders
+            if sub_tree:
+                html_parts.append(render_folder_tree(sub_tree, indent + 1, full_path))
+        
+        return ''.join(html_parts)
+    
+    parts = ['<div class="civ-folder-tree">']
+    parts.append('<div class="civ-folder-item civ-folder-all" data-folder="">📁 All Models</div>')
+    parts.append(render_folder_tree(folder_tree))
+    parts.append('</div>')
+    
+    return ''.join(parts)
+
+
+def load_installed_model_details(model_id_str, model_name):
+    """Load model details when an installed model card is clicked."""
+    if not model_id_str:
+        # No CivitAI ID, show basic file info
+        if model_name:
+            return (
+                gr.update(value=f'<div class="civ-preview"><h2>{model_name}</h2><p>No CivitAI metadata found. This model was not downloaded from CivitAI Browser.</p></div>'),
+                gr.update(value=""),
+                gr.update(value=""),
+                gr.update(value=""),
+                gr.update(visible=False),
+            )
+        return [gr.update()] * 5
+    
+    try:
+        model_id = int(model_id_str)
+    except (ValueError, TypeError):
+        return [gr.update()] * 5
+    
+    # Fetch model info from CivitAI API
+    data = api.get_model(model_id)
+    if not data:
+        return (
+            gr.update(value=f'<div class="civ-error">Could not fetch model info from CivitAI</div>'),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(visible=False),
+        )
+    
+    model_name = data.get("name", "Unknown")
+    creator = data.get("creator", {}).get("username", "Unknown")
+    content_type = data.get("type", "")
+    versions = data.get("modelVersions", [])
+    
+    # Preview HTML
+    preview_parts = [f'<div class="civ-preview">']
+    preview_parts.append(f'<h2>{model_name}</h2>')
+    preview_parts.append(f'<p>by <b>{creator}</b> | {content_type}</p>')
+    
+    desc = data.get("description", "")
+    if desc:
+        preview_parts.append(f'<div class="civ-description">{desc}</div>')
+    
+    # Sample images
+    if versions:
+        imgs = versions[0].get("images", [])
+        if imgs:
+            preview_parts.append('<div class="civ-sample-images">')
+            for img in imgs[:8]:
+                url = img.get("url", "")
+                if img.get("type") == "video":
+                    url = url.replace("width=", "transcode=true,width=")
+                    preview_parts.append(f'<video controls muted playsinline style="max-width:300px"><source src="{url}" type="video/mp4"></video>')
+                else:
+                    preview_parts.append(f'<img loading="lazy" src="{url}" style="max-width:300px;border-radius:8px;margin:4px">')
+            preview_parts.append('</div>')
+    
+    preview_parts.append('</div>')
+    preview_html = ''.join(preview_parts)
+    
+    # Extract thumbnail URL
+    thumbnail = ""
+    if versions:
+        imgs = versions[0].get("images", [])
+        if imgs:
+            thumbnail = imgs[0].get("url", "")
+    
+    return (
+        gr.update(value=preview_html),
+        gr.update(value=str(model_id)),
+        gr.update(value=model_name),
+        gr.update(value=thumbnail),
+        gr.update(visible=True),
+    )
+
+
+def do_show_installed_model_info_btn(model_id_str):
+    """Show model info button when installed model is selected."""
+    return gr.update(visible=bool(model_id_str))
+
+
+def do_toggle_local_save(trigger_str):
+    """Handle save/delete local model info triggered by checkbox in popup.
+    Format: "model_id:action:random_suffix"
+    Returns result string for JS feedback.
+    """
+    if not trigger_str or ':' not in trigger_str:
+        return gr.update()
+
+    parts = trigger_str.split(':')
+    try:
+        model_id = int(parts[0])
+        action = parts[1]  # "save" or "delete"
+    except (ValueError, IndexError):
+        return gr.update()
+
+    import time
+    ts = int(time.time() * 1000)
+
+    if action == "save":
+        ok = _save_model_info_local(model_id)
+        print(f"[DEBUG] Save local model info {model_id}: {'OK' if ok else 'FAILED'}", file=sys.stderr)
+        return gr.update(value=f"{'ok' if ok else 'error'}:{model_id}:{ts}")
+    elif action == "delete":
+        _delete_model_info_local(model_id)
+        print(f"[DEBUG] Deleted local model info {model_id}", file=sys.stderr)
+        return gr.update(value=f"deleted:{model_id}:{ts}")
+
+    return gr.update()
+
+
+# --- UI Definition ---
+
+def on_ui_tabs():
+    with gr.Blocks() as civitai_browser:
+
+        # Hidden states
+        model_id_state = gr.Textbox(visible=False, elem_id="civ_model_id")
+        model_name_state = gr.Textbox(visible=False, elem_id="civ_model_name")
+        model_thumbnail_state = gr.Textbox(visible=False, elem_id="civ_model_thumb")
+        model_select_trigger = gr.Textbox(visible=False, elem_id="civ_model_select")
+        card_checkbox_trigger = gr.Textbox(visible=False, elem_id="civ_card_checkbox")
+
+        # Model info popup
+        model_info_html = gr.HTML(value="", elem_id="civ_model_info_html", visible=False)
+        save_model_info_trigger = gr.Textbox(visible=False, elem_id="civ_save_model_info")
+        save_model_info_result = gr.Textbox(visible=False, elem_id="civ_save_model_info_result")
+
+        # Image metadata for txt2img
+        civitai_image_url_input = gr.Textbox(visible=False, elem_id="civitai_image_url_input")
+        civitai_txt2img_output = gr.Textbox(visible=False, elem_id="civitai_txt2img_output")
+
+        # Load saved search config for default values
+        _saved = _load_search_config()
+        print(f"[DEBUG] Loaded search config: {_saved}", file=sys.stderr)
+
+        with gr.Tabs():
+            # === TAB 1: Browse ===
+            with gr.Tab("Browse"):
+                with gr.Row():
+                    search_input = gr.Textbox(
+                        label="Search", placeholder="Search CivitAI models...",
+                        value=_saved["query"], max_lines=1, scale=4
+                    )
+                    search_type = gr.Dropdown(
+                        choices=["Model name", "User name", "Tag"],
+                        value=_saved["search_type"], label="Search by", scale=1
+                    )
+                    search_btn = gr.Button("Search", variant="primary", scale=1)
+
+                with gr.Accordion("Filters", open=False):
+                    with gr.Row():
+                        content_type = gr.Dropdown(
+                            choices=CONTENT_TYPES, label="Content type",
+                            multiselect=True, value=_saved["content_type"], scale=2
+                        )
+                        base_model_filter = gr.Dropdown(
+                            choices=BASE_MODELS, label="Base model",
+                            multiselect=True, value=_saved["base_model"], scale=2
+                        )
+                    with gr.Row():
+                        sort_type = gr.Dropdown(
+                            choices=SORT_OPTIONS, value=_saved["sort_type"],
+                            label="Sort by", scale=1
+                        )
+                        period_type = gr.Dropdown(
+                            choices=PERIOD_OPTIONS, value=_saved["period"],
+                            label="Period", scale=1
+                        )
+                        show_nsfw = gr.Checkbox(
+                            label="Show NSFW",
+                            value=_saved["nsfw"],
+                            scale=1
+                        )
+                        cards_per_page = gr.Slider(
+                            minimum=5, maximum=100, value=_saved["cards_per_page"], step=5,
+                            label="Cards per page", scale=1
+                        )
+
+                with gr.Row():
+                    prev_btn = gr.Button("< Prev", scale=1)
+                    page_info = gr.Textbox(value="Page 1 / 1", interactive=False, show_label=False, scale=2)
+                    next_btn = gr.Button("Next >", scale=1)
+
+                model_cards = gr.HTML(value='<div class="civ-no-results">Search for models above.</div>')
+
+                with gr.Row():
+                    select_all_btn = gr.Button("Select All / Deselect All", scale=1)
+                    download_selected_btn = gr.Button("Download Selected", variant="primary", scale=1)
+                    save_local_on_download = gr.Checkbox(
+                        label="💾 Save Local Info",
+                        value=False, scale=1
+                    )
+
+                gr.Markdown("### Model Details")
+                with gr.Row():
+                    version_dropdown = gr.Dropdown(label="Version", choices=[], visible=False, scale=2)
+                    file_dropdown = gr.Dropdown(label="File", choices=[], visible=False, scale=2)
+
+                with gr.Row():
+                    install_path_box = gr.Textbox(label="Install path", visible=False, interactive=True, scale=3)
+                    download_btn = gr.Button("Download", variant="primary", visible=False, scale=1)
+
+                with gr.Row():
+                    save_info_btn = gr.Button("Save Info", visible=False)
+                    fav_btn = gr.Button("Toggle Favorite", visible=False)
+                    model_info_btn = gr.Button("📋 Model Info", visible=False, scale=1)
+
+                preview_html = gr.HTML(value="")
+
+            # === TAB 2: Favorites ===
+            with gr.Tab("Favorites"):
+                fav_refresh_btn = gr.Button("Refresh Favorites")
+                fav_status = gr.Textbox(value="", show_label=False, interactive=False)
+                fav_html = gr.HTML(value=get_favorites_html())
+
+            # === TAB 3: Installed Models ===
+            with gr.Tab("Installed"):
+                with gr.Row():
+                    # Left side: Folder tree
+                    with gr.Column(scale=1, min_width=200):
+                        gr.Markdown("### Folders")
+                        folder_tree_html = gr.HTML(value=get_folder_tree_html())
+                        installed_refresh_btn = gr.Button("Scan Installed Models", variant="secondary")
+                    
+                    # Right side: Model cards
+                    with gr.Column(scale=4):
+                        installed_html = gr.HTML(value="")
+                        installed_preview_html = gr.HTML(value="", visible=False)
+                
+                # Hidden states for installed model selection
+                installed_model_id_state = gr.Textbox(visible=False, elem_id="civ_installed_model_id")
+                installed_model_name_state = gr.Textbox(visible=False, elem_id="civ_installed_model_name")
+                installed_filter_folder = gr.Textbox(visible=False, elem_id="civ_installed_filter_folder")
+
+            # === TAB 4: Downloads ===
+            with gr.Tab("Downloads"):
+                dl_refresh_btn = gr.Button("Refresh")
+                dl_clear_btn = gr.Button("Clear Finished")
+                dl_html = gr.HTML(value=dl_manager.get_status_html())
+
+        # --- Event Bindings ---
+        search_inputs = [search_input, search_type, content_type, base_model_filter,
+                         sort_type, period_type, show_nsfw, cards_per_page]
+        search_outputs = [model_cards, page_info]
+
+        search_btn.click(fn=do_search, inputs=search_inputs, outputs=search_outputs)
+        search_input.submit(fn=do_search, inputs=search_inputs, outputs=search_outputs)
+
+        prev_btn.click(fn=do_prev_page, inputs=search_inputs, outputs=search_outputs)
+        next_btn.click(fn=do_next_page, inputs=search_inputs, outputs=search_outputs)
+
+        # Model selection (triggered from JS via textbox)
+        model_select_trigger.change(
+            fn=load_model_details,
+            inputs=[model_select_trigger],
+            outputs=[version_dropdown, install_path_box, download_btn, save_info_btn,
+                     preview_html, model_id_state, model_name_state, model_thumbnail_state]
+        )
+
+        # Show favorite button when model loaded
+        model_id_state.change(fn=do_show_fav_btn, inputs=[model_id_state], outputs=[fav_btn])
+        
+        # Show model info button when model loaded
+        model_id_state.change(fn=do_show_model_info_btn, inputs=[model_id_state], outputs=[model_info_btn])
+
+        # Version change
+        version_dropdown.change(
+            fn=on_version_change,
+            inputs=[version_dropdown, model_id_state],
+            outputs=[file_dropdown, install_path_box]
+        )
+
+        # Download
+        download_btn.click(
+            fn=start_download,
+            inputs=[model_id_state, version_dropdown, file_dropdown, install_path_box, save_local_on_download],
+            outputs=[dl_html]
+        )
+
+        # Model Info button - generate and show model info HTML
+        model_info_btn.click(
+            fn=get_model_info_html,
+            inputs=[model_id_state],
+            outputs=[model_info_html]
+        )
+
+        # Select All - updates model cards HTML and shows status
+        select_status = gr.Textbox(visible=False, interactive=False)
+        select_all_btn.click(
+            fn=do_select_all,
+            inputs=[],
+            outputs=[model_cards, select_status]
+        )
+
+        # Download Selected
+        download_selected_btn.click(
+            fn=do_download_selected,
+            inputs=[save_local_on_download],
+            outputs=[dl_html, select_status]
+        )
+
+        # Card checkbox toggle - update selection state and re-render cards
+        card_checkbox_trigger.change(
+            fn=do_toggle_card_selection,
+            inputs=[card_checkbox_trigger],
+            outputs=[model_cards]
+        )
+
+        # Image URL input - fetch metadata and send to txt2img
+        civitai_image_url_input.change(
+            fn=fetch_and_send_image_metadata,
+            inputs=[civitai_image_url_input],
+            outputs=[civitai_txt2img_output]
+        )
+        
+        # Output change triggers JS to send to txt2img
+        civitai_txt2img_output.change(fn=None, inputs=[civitai_txt2img_output], _js="(genInfo) => genInfo_to_txt2img(genInfo)")
+
+        # Favorites (use Textbox states, NOT gr.HTML as input)
+        fav_btn.click(
+            fn=do_toggle_favorite,
+            inputs=[model_id_state, model_name_state, model_thumbnail_state],
+            outputs=[fav_html, fav_status]
+        )
+        fav_refresh_btn.click(fn=do_refresh_fav, outputs=[fav_html])
+
+        # Save model info locally (triggered by checkbox in popup)
+        save_model_info_trigger.change(
+            fn=do_toggle_local_save,
+            inputs=[save_model_info_trigger],
+            outputs=[save_model_info_result],
+            queue=False,
+            show_progress=False
+        )
+
+        # Installed - Initial load
+        installed_html.update(value=get_installed_models_html())
+        
+        # Folder filter change
+        installed_filter_folder.change(
+            fn=get_installed_models_html,
+            inputs=[installed_filter_folder],
+            outputs=[installed_html]
+        )
+        
+        # Installed model selection - use .change() for more reliable triggering
+        # Just update the HTML, JavaScript will handle the popup via MutationObserver
+        installed_model_id_state.change(
+            fn=get_model_info_html,
+            inputs=[installed_model_id_state],
+            outputs=[model_info_html],
+            queue=False,
+            show_progress=False
+        )
+        
+        # Refresh button
+        installed_refresh_btn.click(
+            fn=lambda: (get_folder_tree_html(), get_installed_models_html()),
+            inputs=[],
+            outputs=[folder_tree_html, installed_html]
+        )
+
+        # Downloads
+        dl_refresh_btn.click(fn=do_refresh_dl, outputs=[dl_html])
+        dl_clear_btn.click(fn=do_clear_dl, outputs=[dl_html])
+
+    return (civitai_browser, "CivitAI Browser", "civitai_browser_new"),
+
+
+script_callbacks.on_ui_tabs(on_ui_tabs)

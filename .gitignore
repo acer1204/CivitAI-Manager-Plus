@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+model_info_cache/
+search_config.json
+.claude/
+.qwen/

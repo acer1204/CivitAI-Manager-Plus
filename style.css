@@ -1,0 +1,780 @@
+/* CivitAI Browser New - Styles */
+
+/* Card Grid */
+.civ-card-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 10px;
+    justify-content: center;
+}
+
+.civ-card {
+    position: relative;
+    width: 10em;
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    background: var(--background-fill-secondary);
+    border: 2px solid transparent;
+}
+
+.civ-card:hover {
+    transform: scale(1.05);
+    z-index: 10;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.3);
+}
+
+.civ-card.civ-selected {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 6px var(--color-accent);
+}
+
+.civ-card.civ-card-selected {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 6px var(--color-accent);
+}
+
+/* Installed models - green border */
+.civ-card.civ-installed {
+    border: 2px solid #22c55e;
+    box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
+    position: relative;
+}
+
+.civ-card.civ-installed::after {
+    content: "✓ Installed";
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: #22c55e;
+    color: white;
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.civ-card.civ-outdated {
+    border-color: orange;
+    box-shadow: 0 0 4px orange;
+}
+
+.civ-card-media {
+    width: 100%;
+    height: 14em;
+    object-fit: cover;
+    display: block;
+}
+
+.civ-card-no-img {
+    width: 100%;
+    height: 14em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--background-fill-primary);
+    color: var(--body-text-color-subdued);
+    font-size: 0.9em;
+}
+
+.civ-card-name {
+    padding: 6px 8px 2px;
+    font-size: 0.85em;
+    color: var(--body-text-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.civ-card-meta {
+    padding: 0 8px 6px;
+    font-size: 0.75em;
+    color: var(--body-text-color-subdued);
+}
+
+/* Card Checkbox */
+.civ-card-checkbox {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 22px;
+    height: 22px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 2px solid rgba(255, 255, 255, 0.6);
+    border-radius: 4px;
+    cursor: pointer;
+    z-index: 5;
+    transition: background 0.15s;
+}
+
+.civ-card-checkbox:hover {
+    border-color: white;
+}
+
+.civ-card-checkbox.checked {
+    background: #2563eb;
+    border-color: #2563eb;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/%3E%3C/svg%3E");
+    background-size: 16px;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+/* Status Messages */
+.civ-no-results, .civ-error {
+    text-align: center;
+    padding: 40px 20px;
+    font-size: 1.1em;
+    color: var(--body-text-color-subdued);
+}
+
+.civ-error {
+    color: #ef4444;
+}
+
+/* Preview */
+.civ-preview {
+    padding: 16px;
+    border-radius: 10px;
+    background: var(--background-fill-secondary);
+    margin-top: 10px;
+}
+
+.civ-preview h2 {
+    margin: 0 0 8px;
+}
+
+.civ-preview p {
+    margin: 0 0 12px;
+    color: var(--body-text-color-subdued);
+}
+
+.civ-description {
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 12px;
+    margin: 10px 0;
+    border-radius: 8px;
+    background: var(--background-fill-primary);
+    border: 1px solid var(--border-color-primary);
+}
+
+.civ-description img {
+    max-width: 100%;
+}
+
+.civ-sample-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.civ-sample-images img,
+.civ-sample-images video {
+    border-radius: 8px;
+    max-height: 400px;
+}
+
+/* Download Queue */
+.civ-dl-queue {
+    padding: 8px;
+}
+
+.civ-dl-empty {
+    text-align: center;
+    padding: 20px;
+    color: var(--body-text-color-subdued);
+}
+
+.civ-dl-item {
+    padding: 10px 12px;
+    margin: 6px 0;
+    border-radius: 8px;
+    border: 1px solid var(--border-color-primary);
+    background: var(--background-fill-secondary);
+}
+
+.civ-dl-completed {
+    border-color: rgba(0, 200, 100, 0.4);
+    background: rgba(0, 200, 100, 0.05);
+}
+
+.civ-dl-failed {
+    border-color: rgba(220, 50, 50, 0.4);
+    background: rgba(220, 50, 50, 0.05);
+}
+
+.civ-dl-name {
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+
+.civ-dl-filename {
+    font-size: 0.85em;
+    color: var(--body-text-color-subdued);
+}
+
+.civ-dl-progress-bar {
+    height: 6px;
+    background: var(--background-fill-primary);
+    border-radius: 3px;
+    margin: 6px 0;
+    overflow: hidden;
+}
+
+.civ-dl-progress-fill {
+    height: 100%;
+    background: var(--color-accent);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.civ-dl-status {
+    font-size: 0.85em;
+    color: var(--body-text-color-subdued);
+}
+
+/* Installed Models */
+.civ-installed-list {
+    padding: 8px;
+}
+
+.civ-installed-section h3 {
+    margin: 16px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-color-primary);
+}
+
+.civ-installed-item {
+    display: flex;
+    gap: 16px;
+    padding: 8px 12px;
+    margin: 2px 0;
+    border-radius: 6px;
+    background: var(--background-fill-secondary);
+    align-items: center;
+}
+
+.civ-installed-item:hover {
+    background: var(--background-fill-primary);
+}
+
+.civ-installed-name {
+    flex: 2;
+    font-weight: 500;
+    word-break: break-all;
+}
+
+.civ-installed-path {
+    flex: 2;
+    font-size: 0.85em;
+    color: var(--body-text-color-subdued);
+}
+
+.civ-installed-size {
+    flex: 0 0 80px;
+    text-align: right;
+    font-size: 0.85em;
+    color: var(--body-text-color-subdued);
+}
+
+/* NSFW indicator (no blur) */
+.civ-card.civ-nsfw {
+    border-color: rgba(220, 50, 50, 0.3);
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+    .civ-sample-item-list {
+        grid-template-columns: 1fr;
+    }
+    
+    .civ-sample-img-list {
+        width: 100%;
+        height: auto;
+        max-height: 400px;
+    }
+    
+    .civ-sample-prompts {
+        max-height: 200px;
+        overflow-y: auto;
+    }
+}
+
+@media (max-width: 768px) {
+    .civ-card {
+        width: 8em;
+    }
+
+    .civ-card-media {
+        height: 11em;
+    }
+
+    .civ-card-grid {
+        gap: 8px;
+    }
+
+    .civ-sample-images img,
+    .civ-sample-images video {
+        max-width: 100%;
+    }
+    
+    .civitai-overlay-content {
+        width: calc(100% - 20px);
+        padding: 1em;
+    }
+    
+    .civ-model-header {
+        flex-direction: column;
+        gap: 4px;
+    }
+}
+
+/* Model Info Popup */
+.civitai-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(20, 20, 20, 0.95);
+    z-index: 1001;
+    overflow-y: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.civitai-overlay-close {
+    position: fixed;
+    top: 10px;
+    right: 20px;
+    font-size: 32pt;
+    color: white;
+    cursor: pointer;
+    z-index: 1011;
+    line-height: 1;
+}
+
+.civitai-overlay-close:hover {
+    color: var(--color-accent);
+}
+
+.civitai-overlay-content {
+    background: var(--neutral-950);
+    padding: 2em;
+    border-radius: var(--block-radius);
+    border: var(--block-border-width) solid var(--block-border-color);
+    max-width: 900px;
+    width: calc(100% - 150px);
+    min-width: 350px;
+    margin: 2em auto;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.civ-model-info {
+    color: var(--body-text-color);
+}
+
+.civ-model-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 2px solid var(--border-color-primary);
+}
+
+.civ-model-title {
+    margin: 0;
+    font-size: 1.5em;
+    color: var(--color-accent);
+}
+
+.civ-model-title a.civ-model-link {
+    color: var(--color-accent);
+    text-decoration: none;
+    transition: all 0.2s;
+}
+
+.civ-model-title a.civ-model-link:hover {
+    color: var(--color-accent-hover, #2563eb);
+    text-decoration: underline;
+}
+
+.civ-model-meta {
+    color: var(--body-text-color-subdued);
+    font-size: 0.9em;
+}
+
+/* Header actions: source indicator + save checkbox */
+.civ-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.civ-data-source {
+    font-size: 0.85em;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.civ-source-local {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.civ-source-online {
+    background: rgba(59, 130, 246, 0.15);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.civ-save-local-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 0.9em;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: var(--background-fill-secondary);
+    border: 1px solid var(--border-color-primary);
+    transition: all 0.2s;
+    white-space: nowrap;
+    color: var(--body-text-color);
+}
+
+.civ-save-local-label:hover {
+    border-color: var(--color-accent);
+}
+
+.civ-save-local-checkbox {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+    accent-color: #22c55e;
+}
+
+.civ-save-local-label.civ-saving {
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+.civ-source-saving {
+    background: rgba(234, 179, 8, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    animation: civ-pulse 1s infinite;
+}
+
+/* Model Info Tabs */
+.civ-model-tabs {
+    margin-top: 16px;
+}
+
+.civ-tab-header {
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color-primary);
+}
+
+.civ-tab-header h3 {
+    margin: 0;
+    color: var(--color-accent);
+    font-size: 1.2em;
+}
+
+.civ-tab-nav {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 2px solid var(--border-color-primary);
+}
+
+.civ-tab-btn {
+    padding: 10px 20px;
+    background: var(--background-fill-secondary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.95em;
+    transition: all 0.2s;
+    color: var(--body-text-color);
+}
+
+.civ-tab-btn:hover {
+    background: var(--background-fill-primary);
+    border-color: var(--color-accent);
+}
+
+.civ-tab-btn.civ-tab-btn-active {
+    background: var(--color-accent);
+    color: white;
+    border-color: var(--color-accent);
+}
+
+.civ-model-details {
+    margin-top: 16px;
+    padding: 12px;
+    background: var(--background-fill-secondary);
+    border-radius: 8px;
+}
+
+.civ-model-details p {
+    margin: 8px 0;
+}
+
+.civ-model-description {
+    padding: 12px;
+    margin: 10px 0;
+    border-radius: 8px;
+    background: var(--background-fill-primary);
+    border: 1px solid var(--border-color-primary);
+}
+
+.civ-model-description img {
+    max-width: 100%;
+}
+
+.civ-model-versions {
+    margin-top: 20px;
+}
+
+.civ-version-block {
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-color-primary);
+}
+
+.civ-version-title {
+    margin: 0 0 12px;
+    color: var(--color-accent);
+}
+
+.civ-base-model {
+    font-size: 0.85em;
+    color: var(--body-text-color-subdued);
+    font-weight: normal;
+}
+
+/* List view layout for sample images */
+.civ-version-images-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.civ-sample-item-list {
+    display: grid;
+    grid-template-columns: 200px 1fr auto;
+    gap: 16px;
+    padding: 12px;
+    background: var(--background-fill-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--border-color-primary);
+}
+
+.civ-sample-img-container {
+    flex-shrink: 0;
+}
+
+.civ-sample-img-list {
+    width: 200px;
+    height: 280px;
+    object-fit: cover;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.civ-sample-img-list:hover {
+    opacity: 0.9;
+}
+
+.civ-sample-prompts {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+.civ-prompt-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.civ-prompt-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: bold;
+    font-size: 0.85em;
+    color: var(--color-accent);
+}
+
+.civ-prompt-text {
+    padding: 8px;
+    background: var(--background-fill-primary);
+    border-radius: 4px;
+    font-size: 0.85em;
+    color: var(--body-text-color);
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.civ-no-prompt {
+    color: var(--body-text-color-subdued);
+    font-style: italic;
+}
+
+.civ-copy-btn {
+    padding: 2px 8px;
+    font-size: 0.8em;
+    background: var(--background-fill-primary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.civ-copy-btn:hover {
+    background: var(--color-accent);
+    color: white;
+    border-color: var(--color-accent);
+}
+
+.civ-sample-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    justify-content: flex-start;
+}
+
+.civ-send-txt2img-btn {
+    padding: 8px 16px;
+    background: var(--color-accent);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.civ-send-txt2img-btn:hover {
+    background: var(--color-accent-hover, #2563eb);
+}
+
+/* Installed Models Card View */
+.civ-installed-card.civ-installed-selected {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 6px var(--color-accent);
+}
+
+.civ-installed-card.civ-has-civitai-id {
+    cursor: pointer;
+}
+
+.civ-installed-card:not(.civ-has-civitai-id) {
+    cursor: default;
+    opacity: 0.8;
+}
+
+.civ-card-media-placeholder {
+    width: 100%;
+    height: 14em;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--background-fill-primary), var(--background-fill-secondary));
+    gap: 8px;
+}
+
+.civ-card-media-placeholder.civ-loading {
+    animation: civ-pulse 1.5s infinite;
+}
+
+@keyframes civ-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.civ-loading-spinner {
+    font-size: 2em;
+    animation: civ-spin 1s linear infinite;
+}
+
+@keyframes civ-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.civ-card-type-label {
+    font-size: 0.75em;
+    padding: 4px 8px;
+    background: var(--color-accent);
+    color: white;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.civ-card-file-icon {
+    font-size: 3em;
+    opacity: 0.5;
+}
+
+/* Folder Tree */
+.civ-folder-tree {
+    padding: 10px;
+    background: var(--background-fill-secondary);
+    border-radius: 8px;
+    max-height: 600px;
+    overflow-y: auto;
+    max-width: 250px;
+}
+
+.civ-folder-item,
+.civ-folder-subitem {
+    padding: 8px 12px;
+    margin: 4px 0;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-size: 0.9em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.civ-folder-item:hover,
+.civ-folder-subitem:hover {
+    background: var(--background-fill-primary);
+}
+
+.civ-folder-item.civ-folder-selected,
+.civ-folder-subitem.civ-folder-selected {
+    background: var(--color-accent);
+    color: white;
+}
+
+.civ-folder-subitem {
+    font-size: 0.85em;
+    color: var(--body-text-color-subdued);
+}
