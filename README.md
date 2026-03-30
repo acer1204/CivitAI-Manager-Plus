@@ -4,6 +4,29 @@ A feature-rich [CivitAI](https://civitai.com/) model manager extension for [Stab
 
 **[中文說明](#中文說明)**
 
+## Screenshots
+
+### Browse & Search
+![Browse Tab](screenshots/browse.png)
+
+### Model Info - Description
+![Model Info Description](screenshots/browse-model-info-01.png)
+
+### Model Info - Preview Images with Prompts
+![Model Info Preview](screenshots/browse-model-info-02.png)
+
+### Installed Models with Folder Tree
+![Installed Tab](screenshots/installed.png)
+
+### Local Cached Model Info
+![Installed Model Info](screenshots/installed-model-info-01.png)
+
+### Local Cached Preview Images
+![Installed Preview](screenshots/installed-model-info-02.png)
+
+### Download Queue
+![Downloads Tab](screenshots/downloads.png)
+
 ---
 
 ## Features Overview
@@ -184,6 +207,29 @@ MIT License
 ## CivitAI Manager Plus
 
 功能豐富的 [CivitAI](https://civitai.com/) 模型管理擴充功能，適用於 [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui)。直接在 WebUI 介面中瀏覽、搜尋、下載和管理 CivitAI 模型。
+
+## 截圖展示
+
+### 瀏覽與搜尋
+![Browse 分頁](screenshots/browse.png)
+
+### 模型資訊 - 說明
+![模型資訊說明](screenshots/browse-model-info-01.png)
+
+### 模型資訊 - 預覽圖與提示詞
+![模型資訊預覽](screenshots/browse-model-info-02.png)
+
+### 已安裝模型與資料夾樹
+![Installed 分頁](screenshots/installed.png)
+
+### 本地快取的模型資訊
+![已安裝模型資訊](screenshots/installed-model-info-01.png)
+
+### 本地快取的預覽圖
+![已安裝預覽圖](screenshots/installed-model-info-02.png)
+
+### 下載佇列
+![Downloads 分頁](screenshots/downloads.png)
 
 ---
 
