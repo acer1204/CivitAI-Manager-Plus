@@ -1,8 +1,28 @@
 # CivitAI Manager Plus
 
-A feature-rich [CivitAI](https://civitai.com/) model manager extension for [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui). Browse, search, download, and manage CivitAI models directly from the WebUI interface.
+A reliable, streamlined [CivitAI](https://civitai.com/) model manager extension for [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui). Built to replace existing CivitAI extensions that are unstable, cluttered, or lack proper offline support.
 
 **[中文說明](#中文說明)**
+
+## Why This Extension?
+
+After testing many existing CivitAI extensions, I found common issues that never seem to get fixed:
+
+1. **Overcomplicated UI** - Too many features crammed together, making simple tasks difficult
+2. **Poor offline support** - Saved model info breaks or shows errors when models are taken down from CivitAI
+3. **Redundant network requests** - Even for already-downloaded models, browsing still fetches data from the internet every time, making it painfully slow
+4. **Unstable batch downloads** - Batch downloading frequently freezes or gets stuck on loading
+5. **Manual path management** - Having to manually set download paths for every model
+
+### What CivitAI Manager Plus does differently:
+
+1. **Simplified UI** - Clean interface, automation over manual steps. Click a card to view info, check boxes to batch download
+2. **True offline model info** - Once saved locally, model info (description, all preview images, prompts) works completely offline. Even if a model is removed from CivitAI, your saved info remains intact and looks identical
+3. **Local-first browsing** - Installed models load previews from local `.preview.png/.mp4` files instantly. Only fetches from CivitAI when no local preview exists (and caches it for next time)
+4. **Async batch downloads** - Non-blocking background downloads. Queue models from multiple pages without freezing the UI
+5. **Auto-organized paths** - Downloads automatically sorted into `BaseModel / Author / ModelName` folders
+
+---
 
 ## Screenshots
 
@@ -206,7 +226,27 @@ This project is licensed under the [AGPL-3.0 License](LICENSE).
 
 ## CivitAI Manager Plus
 
-功能豐富的 [CivitAI](https://civitai.com/) 模型管理擴充功能，適用於 [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui)。直接在 WebUI 介面中瀏覽、搜尋、下載和管理 CivitAI 模型。
+穩定、精簡的 [CivitAI](https://civitai.com/) 模型管理擴充功能，適用於 [Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui)。為了取代現有不穩定、介面雜亂且缺乏完善離線支援的 CivitAI 擴充而開發。
+
+## 為什麼開發這個擴充？
+
+測試了許多現有的 CivitAI 擴充功能後，發現以下常見問題始終沒有被解決：
+
+1. **介面太雜不好操作** - 功能堆疊過多，簡單的操作反而變得複雜
+2. **離線保存方式太陽春** - 模型被 CivitAI 下架後，保存的資訊不是顯示異常就是直接壞掉
+3. **明明已離線下載，瀏覽時仍然連網抓取** - 即使模型已下載到本地，每次瀏覽還是重新從網路抓資料，導致瀏覽效率極低
+4. **批量下載容易當機** - 批量下載經常卡在讀取中或直接凍結
+5. **下載路徑要手動設定** - 每個模型都要自己改路徑，非常麻煩
+
+### CivitAI Manager Plus 的改良：
+
+1. **簡化操作，自動化取代手動** - 乾淨的介面，點擊卡片查看資訊，勾選即可批量下載
+2. **真正的離線模型資訊** - 勾選本地保存後，模型資訊（說明、所有預覽圖、提示詞）完全離線可用。即使模型從 CivitAI 下架，已保存的資訊完整不受影響，預覽視窗看不出差異
+3. **本地優先瀏覽** - 已安裝模型直接從本地 `.preview.png/.mp4` 檔案載入預覽圖，瞬間顯示。只有在沒有本地預覽時才從 CivitAI 抓取（並快取供下次使用）
+4. **批量下載改為非同步處理** - 背景下載不阻塞介面，可以跨頁繼續選取模型加入佇列
+5. **自動整理下載路徑** - 下載自動依 `基底模型 / 作者 / 模型名稱` 分類存放
+
+---
 
 ## 截圖展示
 
