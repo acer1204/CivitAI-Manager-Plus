@@ -53,7 +53,7 @@ class DownloadManager:
 
     def add(self, url, filename, install_path, model_name, version_name,
             model_id, sha256="", preview_url="") -> int:
-        """Add a download to the queue. Returns dl_id."""
+        """Add a download to the queue and ensure background processor is running."""
         with self._lock:
             dl_id = self._next_id
             self._next_id += 1
@@ -64,7 +64,28 @@ class DownloadManager:
                 sha256=sha256, preview_url=preview_url
             )
             self._queue.append(item)
-            return dl_id
+        # Auto-start background processor
+        self._ensure_processor_running()
+        return dl_id
+
+    def _ensure_processor_running(self):
+        """Start background processor thread if not already running."""
+        if self._running:
+            return
+        self._running = True
+        self._cancel_event.clear()
+        threading.Thread(target=self._background_processor, daemon=True).start()
+
+    def _background_processor(self):
+        """Background thread that continuously processes the download queue."""
+        try:
+            while True:
+                has_more, _ = self.process_one_step()
+                if not has_more:
+                    break
+                time.sleep(0.5)
+        finally:
+            self._running = False
 
     def remove(self, dl_id):
         with self._lock:
@@ -257,13 +278,18 @@ class DownloadManager:
         try:
             resp = requests.get(url, headers=headers, allow_redirects=False, timeout=(10, 10))
             if 300 <= resp.status_code <= 308:
-                if "login?returnUrl" in resp.text:
+                location = resp.headers.get("Location", "")
+                if "login?returnUrl" in (location + resp.text):
                     return "NO_API"
-                return resp.headers.get("Location", url)
+                return location if location else url
             elif resp.status_code == 200:
                 return url
+            elif resp.status_code in (401, 403):
+                return "NO_API"
+            print(f"[DEBUG] Download URL resolve: status={resp.status_code} for model {model_id}", file=sys.stderr)
             return None
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Download URL resolve error for model {model_id}: {e}", file=sys.stderr)
             return None
 
     def _http_download(self, url, file_path, item, progress_callback=None):

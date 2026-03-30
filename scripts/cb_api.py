@@ -423,8 +423,12 @@ def make_installed_cards_html(installed_models):
         esc_name = model_name.replace('"', '&quot;').replace("'", "&#39;")
         esc_folder = folder.replace('"', '&quot;')
 
-        # Create image tag if thumbnail available
-        if thumbnail:
+        # Create image/video tag if thumbnail available
+        thumb_type = model.get('thumbnail_type', 'image')
+        if thumbnail and thumb_type == 'video':
+            video_url = thumbnail.replace("width=", "transcode=true,width=")
+            media_tag = f'<video class="civ-card-media" autoplay loop muted playsinline><source src="{video_url}" type="video/mp4"></video>'
+        elif thumbnail:
             media_tag = f'<img class="civ-card-media" loading="lazy" src="{thumbnail}">'
         elif model_id:
             # Has CivitAI ID but no thumbnail cached - show placeholder with loading indicator

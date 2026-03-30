@@ -473,21 +473,28 @@ def _extract_model_id_from_card(card_html):
 
 
 def do_download_selected(save_local_info=False):
-    """Download all selected models."""
+    """Queue all selected models for download and return immediately."""
     global _selected_model_ids
 
     if not _selected_model_ids:
-        return gr.update(value='<div class="civ-dl-empty">No models selected</div>'), ""
+        yield gr.update(value='<div class="civ-dl-empty">No models selected</div>'), ""
+        return
 
     model_ids = list(_selected_model_ids)
+    total = len(model_ids)
     auto_organize = getattr(shared.opts, "civitai_auto_organize", True)
     added = 0
-    save_local_ids = []
+    skipped = []
 
-    for mid in model_ids:
+    # Immediate feedback
+    yield gr.update(value=dl_manager.get_status_html()), f"⏳ Queuing {total} models..."
+
+    # Queue all models for download
+    for i, mid in enumerate(model_ids):
         try:
             data = api.get_model(int(mid))
             if not data:
+                skipped.append((f"ID:{mid}", "Not found"))
                 continue
 
             model_name = data.get("name", "Unknown")
@@ -495,68 +502,77 @@ def do_download_selected(save_local_info=False):
             creator = data.get("creator", {}).get("username", "Unknown")
             versions = data.get("modelVersions", [])
             if not versions:
+                skipped.append((model_name, "No versions"))
                 continue
 
             version = versions[0]
-            version_name = version.get("name", "")
-            base_model = version.get("baseModel", "")
             files = version.get("files", [])
             primary = next((f for f in files if f.get("primary")), files[0] if files else None)
             if not primary:
+                skipped.append((model_name, "No files (login or Early Access required)"))
                 continue
 
-            install_path = build_install_path(content_type, base_model, creator, model_name, auto_organize)
+            dl_url = primary.get("downloadUrl", "")
+            if not dl_url:
+                skipped.append((model_name, "No download URL"))
+                continue
 
-            # Get preview image URL
+            install_path = build_install_path(
+                content_type, version.get("baseModel", ""),
+                creator, model_name, auto_organize
+            )
             preview_url = ""
             images = version.get("images", [])
             if images:
                 preview_url = images[0].get("url", "")
 
             dl_manager.add(
-                url=primary.get("downloadUrl", ""),
+                url=dl_url,
                 filename=primary.get("name", "model.safetensors"),
                 install_path=install_path,
                 model_name=model_name,
-                version_name=version_name,
+                version_name=version.get("name", ""),
                 model_id=int(mid),
                 sha256=primary.get("hashes", {}).get("SHA256", ""),
                 preview_url=preview_url
             )
             added += 1
-            if save_local_info:
-                save_local_ids.append(int(mid))
-        except Exception:
-            continue
 
-    # Clear selection after starting download
+            # Show queuing progress
+            if (i + 1) % 5 == 0 or i == total - 1:
+                yield gr.update(value=dl_manager.get_status_html()), \
+                    f"⏳ Queued {added} / {total} models..."
+        except Exception as e:
+            skipped.append((f"ID:{mid}", str(e)))
+
+    # Clear selection
     _selected_model_ids.clear()
 
-    if added > 0:
-        # Yield progress after each download
-        yield gr.update(value=dl_manager.get_status_html()), f"Started downloading {added} models"
-
-        # Process download with incremental progress updates
-        import time
-        has_more = True
-        while has_more:
-            has_more, _ = dl_manager.process_one_step()
-            yield gr.update(value=dl_manager.get_status_html()), ""
-            time.sleep(0.3)
-
-        _refresh_installed()
-
-        # Save model info locally for selected models (after downloads queued)
-        if save_local_ids:
-            for mid in save_local_ids:
+    # Save model info locally in background (doesn't block downloads)
+    if save_local_info and model_ids:
+        def _bg_save_all(ids):
+            count = 0
+            for mid in ids:
                 try:
-                    if _ensure_model_info_cached(mid):
-                        _save_model_info_local(mid)
-                except Exception as e:
-                    print(f"[DEBUG] Failed to save local info for {mid}: {e}", file=sys.stderr)
-            yield gr.update(value=dl_manager.get_status_html()), f"Saved {len(save_local_ids)} model info locally"
+                    if _ensure_model_info_cached(int(mid)):
+                        if _save_model_info_local(int(mid)):
+                            count += 1
+                except Exception:
+                    pass
+            print(f"[DEBUG] Background save complete: {count}/{len(ids)} model info saved", file=sys.stderr)
+        threading.Thread(target=_bg_save_all, args=(list(model_ids),), daemon=True).start()
 
-    yield gr.update(value=dl_manager.get_status_html()), ""
+    # Final summary
+    status_parts = []
+    if added > 0:
+        status_parts.append(f"✅ Queued {added} downloads")
+    if save_local_info:
+        status_parts.append(f"💾 Saving model info in background")
+    if skipped:
+        skip_details = "; ".join([f"{n}: {r}" for n, r in skipped[:5]])
+        status_parts.append(f"Skipped {len(skipped)}: {skip_details}")
+
+    yield gr.update(value=dl_manager.get_status_html()), " | ".join(status_parts)
 
 
 # --- Download ---
@@ -610,30 +626,17 @@ def start_download(model_id_str, version_name, file_index_str, install_path, sav
                 preview_url=preview_url
             )
 
-            # Yield queue status then process with progress
             yield gr.update(value=dl_manager.get_status_html())
-            
-            # Process download with incremental progress updates
-            import time
-            has_more = True
-            while has_more:
-                has_more, html = dl_manager.process_one_step()
-                yield gr.update(value=html)
-                time.sleep(0.3)  # Update every 300ms
 
-            _refresh_installed()
-
-            # Save model info locally if requested
+            # Save model info locally in background (doesn't block UI)
             if save_local_info:
-                try:
-                    mid = int(model_id_str)
-                    if _ensure_model_info_cached(mid):
-                        _save_model_info_local(mid)
-                        print(f"[DEBUG] Saved local info for model {mid}", file=sys.stderr)
-                except Exception as e:
-                    print(f"[DEBUG] Failed to save local info: {e}", file=sys.stderr)
-
-            yield gr.update(value=dl_manager.get_status_html())
+                def _bg_save(mid):
+                    try:
+                        if _ensure_model_info_cached(mid):
+                            _save_model_info_local(mid)
+                    except Exception as e:
+                        print(f"[DEBUG] Failed to save local info: {e}", file=sys.stderr)
+                threading.Thread(target=_bg_save, args=(int(model_id_str),), daemon=True).start()
             return
 
     yield gr.update(value='<div class="civ-error">Version not found</div>')
@@ -1041,7 +1044,9 @@ def get_installed_models_html(filter_folder=""):
                     if versions:
                         images = versions[0].get('images', [])
                         if images:
-                            model['thumbnail'] = images[0].get('url', '')
+                            img = images[0]
+                            model['thumbnail'] = img.get('url', '')
+                            model['thumbnail_type'] = img.get('type', 'image')
             except Exception:
                 pass
     
@@ -1293,6 +1298,7 @@ def on_ui_tabs():
                         label="💾 Save Local Info",
                         value=False, scale=1
                     )
+                select_status = gr.Textbox(value="", show_label=False, interactive=False, max_lines=1)
 
                 gr.Markdown("### Model Details")
                 with gr.Row():
@@ -1340,6 +1346,7 @@ def on_ui_tabs():
                 dl_refresh_btn = gr.Button("Refresh")
                 dl_clear_btn = gr.Button("Clear Finished")
                 dl_html = gr.HTML(value=dl_manager.get_status_html())
+                dl_auto_refresh_trigger = gr.Textbox(visible=False, elem_id="civ_dl_auto_refresh")
 
         # --- Event Bindings ---
         search_inputs = [search_input, search_type, content_type, base_model_filter,
@@ -1388,7 +1395,6 @@ def on_ui_tabs():
         )
 
         # Select All - updates model cards HTML and shows status
-        select_status = gr.Textbox(visible=False, interactive=False)
         select_all_btn.click(
             fn=do_select_all,
             inputs=[],
@@ -1466,6 +1472,9 @@ def on_ui_tabs():
         # Downloads
         dl_refresh_btn.click(fn=do_refresh_dl, outputs=[dl_html])
         dl_clear_btn.click(fn=do_clear_dl, outputs=[dl_html])
+        dl_auto_refresh_trigger.change(
+            fn=do_refresh_dl, outputs=[dl_html], queue=False, show_progress=False
+        )
 
     return (civitai_browser, "CivitAI Browser", "civitai_browser_new"),
 

@@ -445,6 +445,20 @@ function genInfo_to_txt2img(genInfo) {
     }
 }
 
+// --- Downloads Tab Auto-Refresh ---
+// Trigger hidden auto-refresh textbox every 2s when there are active downloads
+setInterval(function() {
+    // Check if there are active downloads anywhere in the page
+    const hasActive = document.querySelector('.civ-dl-queued, .civ-dl-downloading');
+    if (!hasActive) return;
+    // Trigger auto-refresh via hidden textbox
+    const el = document.querySelector('#civ_dl_auto_refresh textarea');
+    if (el) {
+        el.value = Date.now().toString();
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+}, 2000);
+
 // Make functions globally available
 window.showModelInfoPopup = showModelInfoPopup;
 window.hideModelInfoPopup = hideModelInfoPopup;
