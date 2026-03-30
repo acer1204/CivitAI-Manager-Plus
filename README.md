@@ -198,7 +198,7 @@ Restart SD WebUI.
 
 ## License
 
-MIT License
+This project is licensed under the [AGPL-3.0 License](LICENSE).
 
 ---
 
@@ -401,4 +401,4 @@ git clone https://github.com/acer1204/SD-CivitAI-Manager-Plus.git
 
 ## 授權
 
-MIT License
+This project is licensed under the [AGPL-3.0 License](LICENSE).
