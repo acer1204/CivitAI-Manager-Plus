@@ -145,7 +145,7 @@ Configurable in **Settings > CivitAI Manager Plus**:
 ### Method 2: Manual
 ```bash
 cd stable-diffusion-webui/extensions
-git clone https://github.com/acer1204/SD-CivitAI-Manager-Plus.git sd-civitai-browser-new
+git clone https://github.com/acer1204/SD-CivitAI-Manager-Plus.git
 ```
 Restart SD WebUI.
 
@@ -325,7 +325,7 @@ MIT License
 ### 方法二：手動安裝
 ```bash
 cd stable-diffusion-webui/extensions
-git clone https://github.com/acer1204/SD-CivitAI-Manager-Plus.git sd-civitai-browser-new
+git clone https://github.com/acer1204/SD-CivitAI-Manager-Plus.git
 ```
 重啟 SD WebUI。
 
