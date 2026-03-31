@@ -379,8 +379,11 @@ def scan_installed_civitai_models():
                         'folder': folder,
                         'content_type': '',
                         'size': os.path.getsize(file_path),
+                        'mtime': os.path.getmtime(file_path),
                         'civitai_model_id': None,
                         'civitai_model_name': None,
+                        'download_date': '',
+                        'published_at': '',
                         'thumbnail': None,
                         'thumbnail_type': 'image',
                     }
@@ -410,6 +413,8 @@ def scan_installed_civitai_models():
                                     model_info['civitai_model_name'] = meta.get('model_name')
                                     model_info['version_name'] = meta.get('version_name')
                                     model_info['content_type'] = meta.get('content_type', '')
+                                    model_info['download_date'] = meta.get('download_date', '')
+                                    model_info['published_at'] = meta.get('published_at', '')
                                     if not model_info['thumbnail'] and meta.get('thumbnail_url'):
                                         model_info['thumbnail'] = meta['thumbnail_url']
                                         model_info['thumbnail_type'] = meta.get('thumbnail_type', 'image')

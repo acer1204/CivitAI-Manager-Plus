@@ -133,11 +133,11 @@ Save complete model information locally for offline access. Useful when models m
 
 ### Installed Models Tab
 
-**Folder Tree (Left Panel):**
+**Sort & Folder Tree (Left Panel):**
+- **Sort by** dropdown: Publish Date (Newest/Oldest), Filename (A-Z/Z-A) - persisted across sessions
 - Hierarchical folder navigation based on actual disk structure
 - Shows `models/` and `embeddings/` directories
 - Click any folder to directly load and display its models
-- No need to scan first - just click and view
 
 **Model Grid (Right Panel):**
 - Shows installed models with thumbnails (image and video)
@@ -145,6 +145,9 @@ Save complete model information locally for offline access. Useful when models m
 - Missing previews fetched in background and cached for next time
 - File size and folder path info
 - Click to open model info popup (if CivitAI metadata available)
+
+**Saved Metadata per Model:**
+- Publish date, trigger words, download date, model name, version name, SHA256
 
 ---
 
@@ -154,7 +157,8 @@ Save complete model information locally for offline access. Useful when models m
 - **Progress Bar** with download speed and ETA
 - **Concurrent Downloads** - Download multiple models simultaneously (configurable 1-5)
 - **Auto-Retry** - Up to 5 attempts with adaptive backoff for CDN errors
-- **Metadata Auto-Save** - `.json` metadata file saved alongside each model
+- **Retry Failed** button - Re-queue all failed downloads with one click
+- **Metadata Auto-Save** - `.json` with publish date, trigger words, SHA256 saved alongside each model
 - **Preview Auto-Save** - `.preview.png` or `.preview.mp4` saved alongside each model
 - **Background Processing** - Downloads continue even while browsing other tabs
 - **Clear Finished** - Remove completed/failed items from the queue
@@ -356,11 +360,11 @@ This project is licensed under the [AGPL-3.0 License](LICENSE).
 
 ### Installed 分頁 - 已安裝模型
 
-**資料夾樹（左側面板）：**
+**排序與資料夾樹（左側面板）：**
+- **排序** 下拉選單：發布日期（最新/最舊）、檔名（A-Z/Z-A）— 設定會保存
 - 階層式資料夾導覽，反映實際磁碟結構
 - 顯示 `models/` 和 `embeddings/` 目錄
 - 點擊任何資料夾直接載入並顯示其中的模型
-- 不需先掃描 — 點擊即可檢視
 
 **模型格線（右側面板）：**
 - 顯示已安裝模型及縮圖（支援圖片和影片）
@@ -368,6 +372,9 @@ This project is licensed under the [AGPL-3.0 License](LICENSE).
 - 缺少的預覽圖在背景自動抓取並快取
 - 顯示檔案大小和資料夾路徑
 - 點擊開啟 Model Info 彈窗（需有 CivitAI 中繼資料）
+
+**每個模型保存的中繼資料：**
+- 發布日期、觸發詞、下載日期、模型名稱、版本名稱、SHA256
 
 ---
 
@@ -377,7 +384,8 @@ This project is licensed under the [AGPL-3.0 License](LICENSE).
 - **進度條** 顯示下載速度和預估時間
 - **並行下載** - 同時下載多個模型（可設定 1-5 個）
 - **自動重試** - 最多 5 次，CDN 錯誤自動延長等待時間
-- **自動保存中繼資料** - 模型旁自動保存 `.json` 檔案
+- **重試失敗** 按鈕 - 一鍵重新排入所有失敗的下載
+- **自動保存中繼資料** - 模型旁自動保存 `.json`（含發布日期、觸發詞、SHA256）
 - **自動保存預覽** - 模型旁自動保存 `.preview.png` 或 `.preview.mp4`
 - **背景處理** - 瀏覽其他分頁時下載繼續進行
 - **清除已完成** - 移除已完成/失敗的項目

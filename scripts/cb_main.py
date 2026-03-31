@@ -51,7 +51,7 @@ def _save_search_config(query, search_type, content_type, base_model, sort_type,
         "period": period or "AllTime",
         "nsfw": True if nsfw else False,
         "cards_per_page": int(cards_per_page) if cards_per_page else 20,
-        "save_local": True if save_local else False
+        "save_local": True if save_local else False,
     }
     try:
         with open(_SEARCH_CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -71,7 +71,8 @@ def _load_search_config():
         "period": "AllTime",
         "nsfw": getattr(shared.opts, "civitai_default_nsfw", False),
         "cards_per_page": 20,
-        "save_local": False
+        "save_local": False,
+        "installed_sort": "date_desc"
     }
     try:
         if os.path.exists(_SEARCH_CONFIG_FILE):
@@ -119,6 +120,20 @@ def _localize_description_images(desc_html, images_dir):
             desc_html = desc_html.replace(url, f"/file={local_path}")
 
     return desc_html
+
+
+def _save_installed_sort(sort_value):
+    """Save installed sort preference to search config."""
+    try:
+        config = {}
+        if os.path.exists(_SEARCH_CONFIG_FILE):
+            with open(_SEARCH_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        config["installed_sort"] = sort_value
+        with open(_SEARCH_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def _save_model_info_local(model_id):
@@ -539,7 +554,9 @@ def do_download_selected(save_local_info=False):
                 model_id=int(mid),
                 sha256=primary.get("hashes", {}).get("SHA256", ""),
                 preview_url=preview_url,
-                preview_type=preview_type
+                preview_type=preview_type,
+                published_at=version.get("publishedAt", ""),
+                trained_words=version.get("trainedWords", [])
             )
             added += 1
 
@@ -630,7 +647,9 @@ def start_download(model_id_str, version_name, file_index_str, install_path, sav
                 url=dl_url, filename=filename, install_path=install_path,
                 model_name=model_name, version_name=version_name,
                 model_id=int(model_id_str), sha256=sha256,
-                preview_url=preview_url, preview_type=preview_type
+                preview_url=preview_url, preview_type=preview_type,
+                published_at=v.get("publishedAt", ""),
+                trained_words=v.get("trainedWords", [])
             )
 
             yield gr.update(value=dl_manager.get_status_html())
@@ -708,6 +727,11 @@ def do_refresh_dl():
 
 def do_clear_dl():
     dl_manager.clear_finished()
+    return gr.update(value=dl_manager.get_status_html())
+
+
+def do_retry_failed():
+    count = dl_manager.retry_failed()
     return gr.update(value=dl_manager.get_status_html())
 
 
@@ -1025,7 +1049,7 @@ def fetch_and_send_image_metadata(image_url):
 
 # --- Installed Models Tab ---
 
-def get_installed_models_html(filter_folder=""):
+def get_installed_models_html(filter_folder="", sort_by="date_desc"):
     """Scan and display installed models as cards with preview."""
     _refresh_installed()
 
@@ -1033,13 +1057,38 @@ def get_installed_models_html(filter_folder=""):
 
     installed_models, folders = scan_installed_civitai_models()
 
-    # Filter by folder if specified - match folder path starting with selected folder
+    # Filter by folder
     if filter_folder:
         filter_folder_normalized = filter_folder.replace('\\', '/')
         installed_models = [
-            m for m in installed_models 
+            m for m in installed_models
             if m.get('folder', '').replace('\\', '/').startswith(filter_folder_normalized)
         ]
+
+    # Sort models
+    import time as _time
+    def _date_key(m):
+        # Use published_at first, then download_date, then file mtime
+        pa = m.get('published_at', '')
+        if pa:
+            return pa
+        dd = m.get('download_date', '')
+        if dd:
+            return dd
+        mt = m.get('mtime', 0)
+        return _time.strftime("%Y-%m-%dT%H:%M:%S", _time.localtime(mt)) if mt else ''
+
+    def _name_key(m):
+        return (m.get('civitai_model_name') or m.get('filename', '')).lower()
+
+    if sort_by == "date_desc":
+        installed_models.sort(key=_date_key, reverse=True)
+    elif sort_by == "date_asc":
+        installed_models.sort(key=_date_key)
+    elif sort_by == "name_asc":
+        installed_models.sort(key=_name_key)
+    elif sort_by == "name_desc":
+        installed_models.sort(key=_name_key, reverse=True)
 
     # For models without local preview, fetch thumbnails from API in background
     needs_fetch = [m for m in installed_models if not m.get('thumbnail') and m.get('civitai_model_id')]
@@ -1344,8 +1393,19 @@ def on_ui_tabs():
             # === TAB 3: Installed Models ===
             with gr.Tab("Installed"):
                 with gr.Row():
-                    # Left side: Folder tree
+                    # Left side: Sort + Folder tree
                     with gr.Column(scale=1, min_width=200):
+                        installed_sort = gr.Dropdown(
+                            choices=["Publish Date (Newest)", "Publish Date (Oldest)",
+                                     "Filename (A-Z)", "Filename (Z-A)"],
+                            value={
+                                "date_desc": "Publish Date (Newest)",
+                                "date_asc": "Publish Date (Oldest)",
+                                "name_asc": "Filename (A-Z)",
+                                "name_desc": "Filename (Z-A)"
+                            }.get(_saved.get("installed_sort", "date_desc"), "Publish Date (Newest)"),
+                            label="Sort by", scale=1
+                        )
                         gr.Markdown("### Folders")
                         folder_tree_html = gr.HTML(value=get_folder_tree_html())
                         installed_refresh_btn = gr.Button("Refresh Folder Tree", variant="secondary")
@@ -1361,8 +1421,10 @@ def on_ui_tabs():
 
             # === TAB 4: Downloads ===
             with gr.Tab("Downloads"):
-                dl_refresh_btn = gr.Button("Refresh")
-                dl_clear_btn = gr.Button("Clear Finished")
+                with gr.Row():
+                    dl_refresh_btn = gr.Button("Refresh", scale=1)
+                    dl_retry_btn = gr.Button("Retry Failed", variant="primary", scale=1)
+                    dl_clear_btn = gr.Button("Clear Finished", scale=1)
                 dl_html = gr.HTML(value=dl_manager.get_status_html())
                 dl_auto_refresh_trigger = gr.Textbox(visible=False, elem_id="civ_dl_auto_refresh")
 
@@ -1427,10 +1489,28 @@ def on_ui_tabs():
             show_progress=False
         )
 
-        # Installed - Folder click triggers scan + filter
+        # Map display labels to sort keys
+        _sort_label_to_key = {
+            "Publish Date (Newest)": "date_desc",
+            "Publish Date (Oldest)": "date_asc",
+            "Filename (A-Z)": "name_asc",
+            "Filename (Z-A)": "name_desc",
+        }
+
+        def _installed_with_sort(folder, sort_label):
+            sort_key = _sort_label_to_key.get(sort_label, "date_desc")
+            _save_installed_sort(sort_key)
+            return get_installed_models_html(folder, sort_key)
+
+        # Installed - Folder click or sort change triggers scan + filter
         installed_filter_folder.change(
-            fn=get_installed_models_html,
-            inputs=[installed_filter_folder],
+            fn=_installed_with_sort,
+            inputs=[installed_filter_folder, installed_sort],
+            outputs=[installed_html]
+        )
+        installed_sort.change(
+            fn=_installed_with_sort,
+            inputs=[installed_filter_folder, installed_sort],
             outputs=[installed_html]
         )
 
@@ -1452,21 +1532,28 @@ def on_ui_tabs():
 
         # Downloads
         dl_refresh_btn.click(fn=do_refresh_dl, outputs=[dl_html])
+        dl_retry_btn.click(fn=do_retry_failed, outputs=[dl_html])
         dl_clear_btn.click(fn=do_clear_dl, outputs=[dl_html])
         dl_auto_refresh_trigger.change(
             fn=do_refresh_dl, outputs=[dl_html], queue=False, show_progress=False
         )
 
         # Force-apply saved config on UI load (some Gradio versions ignore value= for certain widgets)
+        _sort_key_to_label = {v: k for k, v in _sort_label_to_key.items()}
+
         def _apply_saved_config():
             return (
                 gr.update(value=_saved["search_type"]),
+                gr.update(value=_saved["sort_type"]),
+                gr.update(value=_saved["period"]),
                 gr.update(value=_saved["nsfw"]),
                 gr.update(value=_saved["save_local"]),
+                gr.update(value=_saved["cards_per_page"]),
+                gr.update(value=_sort_key_to_label.get(_saved.get("installed_sort", "date_desc"), "Publish Date (Newest)")),
             )
         civitai_browser.load(
             fn=_apply_saved_config,
-            outputs=[search_type, show_nsfw, save_local_on_download]
+            outputs=[search_type, sort_type, period_type, show_nsfw, save_local_on_download, cards_per_page, installed_sort]
         )
 
     return (civitai_browser, "CivitAI Manager Plus", "civitai_browser_new"),
