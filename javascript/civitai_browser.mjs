@@ -321,17 +321,23 @@ function bindSendToTxt2ImgButtons() {
             // Decode HTML entities and send directly to txt2img
             let decoded = geninfo.replace(/&#10;/g, '\n').replace(/&quot;/g, '"');
 
-            // Auto-inject <model_name:1> lora tag if not already in positive prompt
-            const modelName = (this.dataset.modelName || '').trim();
-            if (modelName) {
-                const loraTag = `<${modelName}:1>`;
-                // Positive prompt is everything before the first "Negative prompt:" or params line
+            // Auto-inject <lora:filename:1> at END of positive prompt if not already present.
+            // Placing the tag at the end avoids shifting CLIP token positions for other words,
+            // which would change attention weights and produce different images.
+            const loraName = (this.dataset.loraName || '').trim();
+            if (loraName) {
+                const loraTag = `<lora:${loraName}:1>`;
                 const negIdx = decoded.indexOf('\nNegative prompt:');
                 const positivePrompt = negIdx >= 0 ? decoded.slice(0, negIdx) : decoded.split('\n')[0];
-                // Check case-insensitively
-                if (!positivePrompt.toLowerCase().includes(modelName.toLowerCase())) {
-                    const rest = decoded.slice(positivePrompt.length);
-                    decoded = loraTag + (positivePrompt ? ', ' + positivePrompt : '') + rest;
+                const rest = decoded.slice(positivePrompt.length);
+                if (!positivePrompt.toLowerCase().includes(loraName.toLowerCase())) {
+                    // Append to end of positive prompt
+                    decoded = positivePrompt.trimEnd() + ', ' + loraTag + rest;
+                } else {
+                    // LoRA tag already exists mid-prompt — move it to the end to avoid token shift
+                    const loraPattern = new RegExp(',?\\s*<lora:' + loraName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':[\\d.]+>\\s*,?', 'i');
+                    const cleanedPositive = positivePrompt.replace(loraPattern, ', ').replace(/,\s*,/g, ',').trimEnd();
+                    decoded = cleanedPositive + ', ' + loraTag + rest;
                 }
             }
 
@@ -430,23 +436,89 @@ function bindTabSwitching() {
 // --- Send to txt2img ---
 function genInfo_to_txt2img(genInfo) {
     if (!genInfo || genInfo.trim() === '') return;
-    
-    // Get the paste button and prompt textarea
-    const gradioApp = document.querySelector('#txt2img_prompt');
-    if (!gradioApp) return;
-    
-    const promptTextarea = gradioApp.querySelector('textarea');
-    const pasteButton = document.querySelector('#paste');
-    
-    if (promptTextarea && pasteButton) {
-        // Remove the random number prefix (e.g., "123.")
-        const cleanInfo = genInfo.replace(/^\d{3}\./, '');
-        
-        promptTextarea.value = cleanInfo;
-        promptTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-        
-        // Trigger paste button to parse the generation info
-        pasteButton.dispatchEvent(new Event('click', { bubbles: true }));
+
+    const cleanInfo = genInfo.replace(/^\d{3}\./, '');
+
+    // --- Parse geninfo into parts ---
+    // Positive prompt: everything before "\nNegative prompt:"
+    const negMarker = '\nNegative prompt:';
+    const negIdx = cleanInfo.indexOf(negMarker);
+
+    let positivePrompt, afterPositive;
+    if (negIdx >= 0) {
+        positivePrompt = cleanInfo.slice(0, negIdx);
+        afterPositive  = cleanInfo.slice(negIdx + 1); // "Negative prompt: ..."
+    } else {
+        const nl = cleanInfo.indexOf('\n');
+        positivePrompt = nl >= 0 ? cleanInfo.slice(0, nl) : cleanInfo;
+        afterPositive  = nl >= 0 ? cleanInfo.slice(nl + 1) : '';
+    }
+
+    // Negative prompt and params line
+    let negativePrompt = '';
+    let paramsLine = '';
+    if (afterPositive.startsWith('Negative prompt:')) {
+        const nl2 = afterPositive.indexOf('\n');
+        if (nl2 >= 0) {
+            negativePrompt = afterPositive.slice('Negative prompt:'.length, nl2).trim();
+            paramsLine     = afterPositive.slice(nl2 + 1).trim();
+        } else {
+            negativePrompt = afterPositive.slice('Negative prompt:'.length).trim();
+        }
+    } else {
+        paramsLine = afterPositive.trim();
+    }
+
+    // --- Directly set positive prompt (preserves original spacing) ---
+    const posEl = document.querySelector('#txt2img_prompt textarea');
+    if (posEl) {
+        posEl.value = positivePrompt;
+        posEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // --- Directly set negative prompt ---
+    const negEl = document.querySelector('#txt2img_neg_prompt textarea');
+    if (negEl) {
+        negEl.value = negativePrompt;
+        negEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // --- Use paste button ONLY for parameters (steps, sampler, CFG…) ---
+    // Reconstruct a minimal geninfo so paste can parse the params line.
+    if (paramsLine && posEl) {
+        const pasteButton = document.querySelector('#paste');
+        if (pasteButton) {
+            // Put the full geninfo back so paste can parse everything;
+            // positive/negative prompts will be overwritten again by paste,
+            // but that is acceptable for parameter extraction.
+            posEl.value = cleanInfo;
+            posEl.dispatchEvent(new Event('input', { bubbles: true }));
+            pasteButton.dispatchEvent(new Event('click', { bubbles: true }));
+
+            // Restore the original-formatted positive prompt after paste normalises it
+            setTimeout(() => {
+                if (posEl) {
+                    posEl.value = positivePrompt;
+                    posEl.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                if (negEl) {
+                    negEl.value = negativePrompt;
+                    negEl.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            }, 100);
+        }
+    }
+
+    // --- Enable Hires. fix checkbox if geninfo contains Hires params ---
+    if (/Hires upscal/i.test(paramsLine)) {
+        setTimeout(() => {
+            const hrWrapper = document.querySelector('#txt2img_enable_hr');
+            if (!hrWrapper) return;
+            const hrCheckbox = hrWrapper.querySelector('input[type=checkbox]');
+            if (hrCheckbox && !hrCheckbox.checked) {
+                hrCheckbox.click();
+            }
+        }, 200);
     }
 }
 

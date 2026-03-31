@@ -814,12 +814,24 @@ def get_model_info_html(model_id_str):
 
     print(f"[DEBUG] Model: {data.get('name', 'Unknown')} (source: {'local' if is_local else 'online'})", file=sys.stderr)
     print(f"[DEBUG] Generating HTML...", file=sys.stderr)
-    
+
     model_name = data.get("name", "Unknown")
     creator = data.get("creator", {}).get("username", "Unknown")
     content_type = data.get("type", "")
     nsfw = data.get("nsfw", False)
     versions = data.get("modelVersions", [])
+
+    # Find installed safetensors filename for LoRA tag injection
+    _lora_filename = ""
+    try:
+        from cb_api import scan_installed_civitai_models
+        _installed, _ = scan_installed_civitai_models()
+        for _m in _installed:
+            if str(_m.get("civitai_model_id", "")) == str(model_id):
+                _lora_filename = os.path.splitext(os.path.basename(_m["path"]))[0]
+                break
+    except Exception:
+        pass
     
     # Build CivitAI URL
     civitai_url = f"https://civitai.com/models/{model_id}"
@@ -963,21 +975,49 @@ def get_model_info_html(model_id_str):
                             _m = {}
                     else:
                         _m = {}
+                    def _mget(d, *keys):
+                        """Try multiple key variants, return first non-falsy value."""
+                        for k in keys:
+                            v = d.get(k)
+                            if v is not None and v != '':
+                                return v
+                        return None
+
                     params = []
-                    if _m.get('steps'): params.append(f"Steps: {_m['steps']}")
-                    if _m.get('sampler'): params.append(f"Sampler: {_m['sampler']}")
-                    if _m.get('cfgScale'): params.append(f"CFG scale: {_m['cfgScale']}")
-                    if _m.get('seed'): params.append(f"Seed: {_m['seed']}")
-                    if _m.get('Size'): params.append(f"Size: {_m['Size']}")
-                    elif _m.get('width') and _m.get('height'): params.append(f"Size: {_m['width']}x{_m['height']}")
-                    if _m.get('Model'): params.append(f"Model: {_m['Model']}")
-                    if _m.get('clipSkip'): params.append(f"Clip skip: {_m['clipSkip']}")
+                    _v = _mget(_m, 'steps')
+                    if _v: params.append(f"Steps: {_v}")
+                    _v = _mget(_m, 'sampler', 'Sampler')
+                    if _v: params.append(f"Sampler: {_v}")
+                    _v = _mget(_m, 'cfgScale', 'cfg scale', 'CFG scale', 'cfgscale')
+                    if _v: params.append(f"CFG scale: {_v}")
+                    _v = _mget(_m, 'seed')
+                    if _v: params.append(f"Seed: {_v}")
+                    _v = _mget(_m, 'Size', 'size')
+                    if _v:
+                        params.append(f"Size: {_v}")
+                    elif _m.get('width') and _m.get('height'):
+                        params.append(f"Size: {_m['width']}x{_m['height']}")
+                    _v = _mget(_m, 'Model')
+                    if _v: params.append(f"Model: {_v}")
+                    _v = _mget(_m, 'clipSkip', 'Clip skip', 'clip skip')
+                    if _v: params.append(f"Clip skip: {_v}")
+                    # Hires. fix — try both camelCase and A1111 space-separated keys
+                    _v = _mget(_m, 'hiresUpscaler', 'hires upscaler', 'Hires upscaler')
+                    if _v: params.append(f"Hires upscaler: {_v}")
+                    _v = _mget(_m, 'hiresUpscale', 'hiresUpscaleBy', 'hiresScale',
+                                    'hires upscale', 'Hires upscale')
+                    if _v: params.append(f"Hires upscale: {_v}")
+                    _v = _mget(_m, 'hiresSteps', 'hires steps', 'Hires steps')
+                    if _v: params.append(f"Hires steps: {_v}")
+                    _v = _mget(_m, 'denoisingStrength', 'hiresDenoising',
+                                    'Denoising strength', 'denoising strength')
+                    if _v: params.append(f"Denoising strength: {_v}")
                     if params:
                         geninfo_lines.append(", ".join(params))
                     geninfo_str = chr(10).join(geninfo_lines)
                     geninfo_escaped = geninfo_str.replace(chr(34), "&quot;").replace(chr(10), "&#10;") if geninfo_str else ''
 
-                    model_name_escaped = model_name.replace('"', '&quot;')
+                    lora_name_escaped = _lora_filename.replace('"', '&quot;')
                     parts.append(f'''<div class="civ-sample-item-list" data-img-url="{url}">
                         <div class="civ-sample-img-container">
                             <img class="civ-sample-img-list" loading="lazy" src="{url}" data-url="{url}">
@@ -993,7 +1033,7 @@ def get_model_info_html(model_id_str):
                             </div>
                         </div>
                         <div class="civ-sample-actions">
-                            <button class="civ-send-txt2img-btn" data-geninfo="{geninfo_escaped}" data-model-name="{model_name_escaped}" title="Send all to txt2img">📤 Send</button>
+                            <button class="civ-send-txt2img-btn" data-geninfo="{geninfo_escaped}" data-lora-name="{lora_name_escaped}" title="Send all to txt2img">📤 Send</button>
                         </div>
                     </div>''')
             parts.append('</div>')  # End version-images-list
