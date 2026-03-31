@@ -319,7 +319,22 @@ function bindSendToTxt2ImgButtons() {
                 return;
             }
             // Decode HTML entities and send directly to txt2img
-            const decoded = geninfo.replace(/&#10;/g, '\n').replace(/&quot;/g, '"');
+            let decoded = geninfo.replace(/&#10;/g, '\n').replace(/&quot;/g, '"');
+
+            // Auto-inject <model_name:1> lora tag if not already in positive prompt
+            const modelName = (this.dataset.modelName || '').trim();
+            if (modelName) {
+                const loraTag = `<${modelName}:1>`;
+                // Positive prompt is everything before the first "Negative prompt:" or params line
+                const negIdx = decoded.indexOf('\nNegative prompt:');
+                const positivePrompt = negIdx >= 0 ? decoded.slice(0, negIdx) : decoded.split('\n')[0];
+                // Check case-insensitively
+                if (!positivePrompt.toLowerCase().includes(modelName.toLowerCase())) {
+                    const rest = decoded.slice(positivePrompt.length);
+                    decoded = loraTag + (positivePrompt ? ', ' + positivePrompt : '') + rest;
+                }
+            }
+
             genInfo_to_txt2img(decoded);
 
             // Visual feedback

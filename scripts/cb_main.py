@@ -851,6 +851,7 @@ def get_model_info_html(model_id_str):
     parts.append('''<div class="civ-tab-nav">
         <button class="civ-tab-btn civ-tab-btn-active" data-tab-target="description">📖 Description</button>
         <button class="civ-tab-btn" data-tab-target="images">🖼️ Preview Images</button>
+        <button class="civ-tab-btn" data-tab-target="triggers">🔑 Trigger Words</button>
     </div>''')
 
     # Tabs container
@@ -976,6 +977,7 @@ def get_model_info_html(model_id_str):
                     geninfo_str = chr(10).join(geninfo_lines)
                     geninfo_escaped = geninfo_str.replace(chr(34), "&quot;").replace(chr(10), "&#10;") if geninfo_str else ''
 
+                    model_name_escaped = model_name.replace('"', '&quot;')
                     parts.append(f'''<div class="civ-sample-item-list" data-img-url="{url}">
                         <div class="civ-sample-img-container">
                             <img class="civ-sample-img-list" loading="lazy" src="{url}" data-url="{url}">
@@ -991,7 +993,7 @@ def get_model_info_html(model_id_str):
                             </div>
                         </div>
                         <div class="civ-sample-actions">
-                            <button class="civ-send-txt2img-btn" data-geninfo="{geninfo_escaped}" title="Send all to txt2img">📤 Send</button>
+                            <button class="civ-send-txt2img-btn" data-geninfo="{geninfo_escaped}" data-model-name="{model_name_escaped}" title="Send all to txt2img">📤 Send</button>
                         </div>
                     </div>''')
             parts.append('</div>')  # End version-images-list
@@ -999,6 +1001,40 @@ def get_model_info_html(model_id_str):
     
     parts.append('</div>')  # End model-versions
     parts.append('</div>')  # End Tab 2 (Images)
+
+    # Tab 3: Trigger Words (hidden by default)
+    parts.append('<div class="civ-tab-content civ-tab-triggers" id="civ-tab-triggers" style="display:none;">')
+    parts.append('<div class="civ-tab-header"><h3>🔑 Trigger Words</h3></div>')
+    parts.append('<div class="civ-triggers-container">')
+
+    trigger_count = 0
+    for v in versions[:5]:
+        trained_words = v.get("trainedWords") or []
+        # Each element in trainedWords is a separate trigger group (comma-separated chips inside)
+        for word_group in trained_words:
+            # Split the group string into individual chips
+            chips = [c.strip() for c in word_group.split(',') if c.strip()]
+            if not chips:
+                continue
+            trigger_count += 1
+            label = f"Trigger example {trigger_count:02d}"
+            copy_str = ", ".join(chips)
+            copy_escaped = copy_str.replace('"', '&quot;')
+            words_html = "".join(f'<span class="civ-trigger-chip">{c}</span>' for c in chips)
+            parts.append(f'''<div class="civ-trigger-block">
+                <div class="civ-trigger-block-header">
+                    <span class="civ-trigger-label">{label}</span>
+                    <button class="civ-copy-btn" data-copy="{copy_escaped}">📋 Copy All</button>
+                </div>
+                <div class="civ-trigger-chips">{words_html}</div>
+            </div>''')
+
+    if trigger_count == 0:
+        parts.append('<div class="civ-no-triggers">No trigger words provided for this model.</div>')
+
+    parts.append('</div>')  # End triggers-container
+    parts.append('</div>')  # End Tab 3 (Triggers)
+
     parts.append('</div>')  # End tabs container
     parts.append('</div>')  # End main container
     

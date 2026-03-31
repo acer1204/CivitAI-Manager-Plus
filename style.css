@@ -778,3 +778,71 @@
     font-size: 0.85em;
     color: var(--body-text-color-subdued);
 }
+
+/* Trigger Words Tab */
+.civ-triggers-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 8px 0;
+}
+
+.civ-trigger-block {
+    background: var(--background-fill-secondary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.civ-trigger-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.civ-trigger-block-header .civ-copy-btn {
+    background: #f97316;
+    color: white;
+    border-color: #ea6c08;
+}
+
+.civ-trigger-block-header .civ-copy-btn:hover {
+    background: #ea6c08;
+    border-color: #d95f00;
+}
+
+.civ-trigger-label {
+    font-weight: bold;
+    font-size: 0.9em;
+    color: var(--color-accent);
+}
+
+.civ-trigger-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.civ-trigger-chip {
+    display: inline-block;
+    padding: 4px 10px;
+    background: var(--background-fill-primary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 20px;
+    font-size: 0.85em;
+    color: var(--body-text-color);
+    cursor: default;
+    user-select: text;
+}
+
+.civ-trigger-chip:hover {
+    border-color: var(--color-accent);
+    background: rgba(var(--color-accent-rgb, 99, 102, 241), 0.08);
+}
+
+.civ-no-triggers {
+    color: var(--body-text-color-subdued);
+    font-style: italic;
+    padding: 12px 0;
+}
