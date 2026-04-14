@@ -29,6 +29,7 @@ _last_search_items = []   # store search results for Select All
 _selected_model_ids = set()  # track selected model IDs for batch download
 _installed_files = set()
 _installed_hashes = set()
+_installed_model_ids = set()
 _page_cursors = {}  # page_number -> nextCursor from that page's response
 
 # Local model info storage - use extension directory for reliability
@@ -269,8 +270,8 @@ PERIOD_OPTIONS = ["AllTime", "Year", "Month", "Week", "Day"]
 
 def _refresh_installed():
     """Refresh installed models cache."""
-    global _installed_files, _installed_hashes
-    _installed_files, _installed_hashes = scan_installed_models()
+    global _installed_files, _installed_hashes, _installed_model_ids
+    _installed_files, _installed_hashes, _installed_model_ids = scan_installed_models()
 
 
 # --- Search & Browse ---
@@ -314,7 +315,7 @@ def _do_search_internal(query, search_type, content_type, base_model, sort_type,
     items = result.get("items", [])
     _last_search_items = items
 
-    html = make_model_cards_html(items, _installed_hashes, _installed_files)
+    html = make_model_cards_html(items, _installed_hashes, _installed_files, installed_model_ids=_installed_model_ids)
 
     page_display = f"Page {_current_page} / {_total_pages}" if meta.get("totalPages") else f"Page {_current_page}"
     return html, page_display
@@ -477,7 +478,7 @@ def do_select_all():
                     _selected_model_ids.add(model_id)
     
     # Return updated cards HTML with selection state
-    html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids)
+    html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids, _installed_model_ids)
     status = f"Selected {len(_selected_model_ids)} models" if _selected_model_ids else "Deselected all"
     return gr.update(value=html), status
 
@@ -753,7 +754,7 @@ def do_toggle_card_selection(model_id_str):
         _selected_model_ids.add(model_id_str)
     
     # Re-render cards with updated selection
-    html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids)
+    html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids, _installed_model_ids)
     return gr.update(value=html)
 
 

@@ -220,7 +220,7 @@ def build_install_path(content_type, base_model="", author="", model_name="", au
 
 # --- Model card HTML generation ---
 
-def make_model_cards_html(items, installed_hashes=None, installed_files=None, selected_ids=None):
+def make_model_cards_html(items, installed_hashes=None, installed_files=None, selected_ids=None, installed_model_ids=None):
     """Generate HTML for model cards grid."""
     if installed_hashes is None:
         installed_hashes = set()
@@ -228,6 +228,8 @@ def make_model_cards_html(items, installed_hashes=None, installed_files=None, se
         installed_files = set()
     if selected_ids is None:
         selected_ids = set()
+    if installed_model_ids is None:
+        installed_model_ids = set()
 
     if not items:
         return '<div class="civ-no-results">No models found.</div>'
@@ -251,15 +253,20 @@ def make_model_cards_html(items, installed_hashes=None, installed_files=None, se
 
         # Determine install status
         is_installed = False
-        for v_idx, v in enumerate(versions):
-            for f in v.get("files", []):
-                sha = f.get("hashes", {}).get("SHA256", "").upper()
-                fname = f.get("name", "").lower()
-                if (sha and sha in installed_hashes) or fname in installed_files:
-                    is_installed = True
+        # Check by model_id first (works for restricted/commission models where files[] may be empty)
+        model_id_int = item.get("id")
+        if model_id_int and model_id_int in installed_model_ids:
+            is_installed = True
+        if not is_installed:
+            for v_idx, v in enumerate(versions):
+                for f in v.get("files", []):
+                    sha = f.get("hashes", {}).get("SHA256", "").upper()
+                    fname = f.get("name", "").lower()
+                    if (sha and sha in installed_hashes) or fname in installed_files:
+                        is_installed = True
+                        break
+                if is_installed:
                     break
-            if is_installed:
-                break
 
         # Selection status
         is_selected = model_id in selected_ids
@@ -312,9 +319,10 @@ def make_model_cards_html(items, installed_hashes=None, installed_files=None, se
 # --- Installed model scanning ---
 
 def scan_installed_models():
-    """Scan all model folders for installed files. Returns (filenames_set, sha256_set)."""
+    """Scan all model folders for installed files. Returns (filenames_set, sha256_set, model_ids_set)."""
     filenames = set()
     sha256s = set()
+    model_ids = set()
 
     for ctype in CONTENT_TYPE_FOLDERS:
         folder = get_model_folder(ctype)
@@ -328,14 +336,20 @@ def scan_installed_models():
                         try:
                             with open(os.path.join(root, f), 'r', encoding='utf-8') as jf:
                                 data = json.load(jf)
-                                if isinstance(data, dict) and data.get('sha256'):
-                                    sha256s.add(data['sha256'].upper())
+                                if isinstance(data, dict):
+                                    if data.get('sha256'):
+                                        sha256s.add(data['sha256'].upper())
+                                    if data.get('model_id'):
+                                        try:
+                                            model_ids.add(int(data['model_id']))
+                                        except (ValueError, TypeError):
+                                            pass
                         except Exception:
                             pass
         except Exception:
             pass
 
-    return filenames, sha256s
+    return filenames, sha256s, model_ids
 
 
 def scan_installed_civitai_models():
