@@ -30,6 +30,7 @@ class DownloadItem:
     model_name: str
     version_name: str
     model_id: int
+    version_id: int = 0
     sha256: str = ""
     preview_url: str = ""
     preview_type: str = "image"  # "image" or "video"
@@ -55,7 +56,7 @@ class DownloadManager:
         self._running = False
 
     def add(self, url, filename, install_path, model_name, version_name,
-            model_id, sha256="", preview_url="", preview_type="image",
+            model_id, version_id=0, sha256="", preview_url="", preview_type="image",
             published_at="", trained_words=None) -> int:
         """Add a download to the queue and ensure background processor is running."""
         with self._lock:
@@ -65,6 +66,7 @@ class DownloadManager:
                 dl_id=dl_id, url=url, filename=filename,
                 install_path=install_path, model_name=model_name,
                 version_name=version_name, model_id=model_id,
+                version_id=int(version_id) if version_id else 0,
                 sha256=sha256, preview_url=preview_url,
                 preview_type=preview_type, published_at=published_at,
                 trained_words=trained_words
@@ -390,6 +392,7 @@ class DownloadManager:
         metadata = {
             "sha256": item.sha256,
             "model_id": item.model_id,
+            "version_id": item.version_id,
             "model_name": item.model_name,
             "version_name": item.version_name,
             "download_date": time.strftime("%Y-%m-%d %H:%M:%S"),

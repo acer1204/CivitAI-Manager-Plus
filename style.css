@@ -94,6 +94,31 @@
     color: var(--body-text-color-subdued);
 }
 
+/* Version subtitle (below model name, for multi-version cards) */
+.civ-card-version {
+    padding: 0 8px 2px;
+    font-size: 0.78em;
+    color: var(--body-text-color-subdued);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-style: italic;
+}
+
+/* Same-source grouping icon (top-left corner of card) */
+.civ-sibling-icon {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    font-size: 0.8em;
+    background: rgba(0,0,0,0.55);
+    border-radius: 4px;
+    padding: 1px 4px;
+    line-height: 1.4;
+    cursor: default;
+    z-index: 2;
+}
+
 /* Card Checkbox */
 .civ-card-checkbox {
     position: absolute;

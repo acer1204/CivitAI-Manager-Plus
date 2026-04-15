@@ -43,8 +43,9 @@ document.addEventListener('click', function(e) {
     
     e.stopPropagation();
 
-    const modelId = checkbox.dataset.modelId;
-    if (modelId) {
+    // Use selection key (model_id:version_id or plain model_id)
+    const selectionKey = checkbox.dataset.selectionKey || checkbox.dataset.modelId;
+    if (selectionKey) {
         // Toggle visual state immediately
         checkbox.classList.toggle('checked');
 
@@ -55,7 +56,7 @@ document.addEventListener('click', function(e) {
         }
 
         // Trigger Gradio update for backend state
-        updateGradioTextbox('#civ_card_checkbox', modelId);
+        updateGradioTextbox('#civ_card_checkbox', selectionKey);
     }
 });
 

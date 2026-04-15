@@ -220,8 +220,58 @@ def build_install_path(content_type, base_model="", author="", model_name="", au
 
 # --- Model card HTML generation ---
 
+def flatten_to_version_items(items, base_model_filter=None):
+    """Expand model items into version-level items for Browse display.
+
+    When base_model_filter is set (list or str), only versions matching the
+    filter are returned; one dict per matching version.  When no filter is
+    active the latest version only is returned (current behaviour).
+    """
+    flattened = []
+    filter_set = set()
+    if base_model_filter:
+        if isinstance(base_model_filter, list):
+            filter_set = set(base_model_filter)
+        else:
+            filter_set = {base_model_filter}
+
+    for item in items:
+        versions = item.get("modelVersions", [])
+        if not versions:
+            continue
+
+        if filter_set:
+            matching = [v for v in versions if v.get("baseModel", "") in filter_set]
+        else:
+            matching = []
+
+        # Fallback: no matching versions → show only the latest one
+        if not matching:
+            matching = versions[:1]
+
+        has_siblings = len(matching) > 1
+
+        for v in matching:
+            vi = dict(item)          # shallow copy of model-level fields
+            vi["_version"]      = v
+            vi["_version_id"]   = v.get("id", "")
+            vi["_version_name"] = v.get("name", "")
+            vi["_base_model"]   = v.get("baseModel", "")
+            vi["_has_siblings"] = has_siblings
+            vi["_images"]       = v.get("images", [])
+            vi["_files"]        = v.get("files", [])
+            flattened.append(vi)
+
+    return flattened
+
+
 def make_model_cards_html(items, installed_hashes=None, installed_files=None, selected_ids=None, installed_model_ids=None):
-    """Generate HTML for model cards grid."""
+    """Generate HTML for model cards grid.
+
+    items can be either raw model items (model-level) or version-level items
+    produced by flatten_to_version_items().  Version-level items are identified
+    by the presence of the '_version_id' key.
+    """
     if installed_hashes is None:
         installed_hashes = set()
     if installed_files is None:
@@ -237,43 +287,71 @@ def make_model_cards_html(items, installed_hashes=None, installed_files=None, se
     parts = ['<div class="civ-card-grid">']
 
     for item in items:
-        model_id = str(item.get("id", ""))
-        model_name = item.get("name", "Unknown")
-        nsfw = "civ-nsfw" if item.get("nsfw") else ""
+        model_id     = str(item.get("id", ""))
+        model_id_int = item.get("id")
+        model_name   = item.get("name", "Unknown")
+        nsfw         = "civ-nsfw" if item.get("nsfw") else ""
         content_type = item.get("type", "")
-        creator = item.get("creator", {}).get("username", "Unknown")
+        creator      = item.get("creator", {}).get("username", "Unknown")
 
         versions = item.get("modelVersions", [])
         if not versions:
             continue
 
-        version = versions[0]
-        base_model = version.get("baseModel", "")
-        images = version.get("images", [])
+        # ── Version-level item (produced by flatten_to_version_items) ──
+        is_version_item = "_version_id" in item
+        if is_version_item:
+            version_id   = str(item["_version_id"])
+            version_name = item.get("_version_name", "")
+            base_model   = item.get("_base_model", "")
+            has_siblings = item.get("_has_siblings", False)
+            images       = item.get("_images", [])
+            check_files  = item.get("_files", [])
+            # selection key encodes both model and version
+            selection_key = f"{model_id}:{version_id}"
+        else:
+            # ── Legacy model-level item ──
+            version_id    = ""
+            version_name  = ""
+            has_siblings  = False
+            version       = versions[0]
+            base_model    = version.get("baseModel", "")
+            images        = version.get("images", [])
+            check_files   = []
+            for v in versions:
+                check_files.extend(v.get("files", []))
+            selection_key = model_id
 
-        # Determine install status
+        # ── Installed status ──
         is_installed = False
-        # Check by model_id first (works for restricted/commission models where files[] may be empty)
-        model_id_int = item.get("id")
-        if model_id_int and model_id_int in installed_model_ids:
-            is_installed = True
-        if not is_installed:
-            for v_idx, v in enumerate(versions):
-                for f in v.get("files", []):
-                    sha = f.get("hashes", {}).get("SHA256", "").upper()
+        if is_version_item:
+            # Prefer exact version file match
+            for f in check_files:
+                sha   = f.get("hashes", {}).get("SHA256", "").upper()
+                fname = f.get("name", "").lower()
+                if (sha and sha in installed_hashes) or fname in installed_files:
+                    is_installed = True
+                    break
+            # Fallback: model_id match (commission models with empty files[])
+            if not is_installed and model_id_int and model_id_int in installed_model_ids:
+                is_installed = True
+        else:
+            if model_id_int and model_id_int in installed_model_ids:
+                is_installed = True
+            if not is_installed:
+                for f in check_files:
+                    sha   = f.get("hashes", {}).get("SHA256", "").upper()
                     fname = f.get("name", "").lower()
                     if (sha and sha in installed_hashes) or fname in installed_files:
                         is_installed = True
                         break
-                if is_installed:
-                    break
 
-        # Selection status
-        is_selected = model_id in selected_ids
+        # ── Selection ──
+        is_selected    = selection_key in selected_ids
         selected_class = "civ-card-selected" if is_selected else ""
         installed_class = "civ-installed" if is_installed else ""
 
-        # Image
+        # ── Thumbnail ──
         if images:
             img = images[0]
             img_url = img.get("url", "")
@@ -285,27 +363,46 @@ def make_model_cards_html(items, installed_hashes=None, installed_files=None, se
         else:
             media_tag = '<div class="civ-card-no-img">No Preview</div>'
 
-        # Truncate name
+        # ── Name / version subtitle ──
         display_name = model_name[:35] + "..." if len(model_name) > 35 else model_name
+        esc_name     = model_name.replace('"', '&quot;').replace("'", "&#39;")
+        esc_ver      = version_name.replace('"', '&quot;').replace("'", "&#39;")
 
-        # Escape for HTML attributes
-        esc_name = model_name.replace('"', '&quot;').replace("'", "&#39;")
+        version_subtitle = (
+            f'<div class="civ-card-version" title="{esc_ver}">{version_name}</div>'
+            if version_name else ""
+        )
 
-        # Hide checkbox for installed models
+        # ── Same-source grouping icon ──
+        sibling_icon = (
+            '<span class="civ-sibling-icon" title="Multiple versions from the same model">🔗</span>'
+            if has_siblings else ""
+        )
+
+        # ── Checkbox ──
         checkbox_html = ""
         if not is_installed:
             checkbox_class = "civ-card-checkbox checked" if is_selected else "civ-card-checkbox"
-            checkbox_html = f'<div class="{checkbox_class}" data-model-id="{model_id}"></div>'
+            checkbox_html = (
+                f'<div class="{checkbox_class}"'
+                f' data-model-id="{model_id}"'
+                f' data-version-id="{version_id}"'
+                f' data-selection-key="{selection_key}"></div>'
+            )
 
         card = f'''<div class="civ-card {nsfw} {installed_class} {selected_class}"
                         data-model-id="{model_id}"
+                        data-version-id="{version_id}"
+                        data-selection-key="{selection_key}"
                         data-model-name="{esc_name}"
                         data-content-type="{content_type}"
                         data-base-model="{base_model}"
                         data-creator="{creator}"
                         data-installed="{str(is_installed).lower()}">
+            {sibling_icon}
             {media_tag}
             <div class="civ-card-name" title="{esc_name}">{display_name}</div>
+            {version_subtitle}
             <div class="civ-card-meta">{base_model}</div>
             {checkbox_html}
         </div>'''
@@ -424,6 +521,7 @@ def scan_installed_civitai_models():
                                 meta = json.load(jf)
                                 if isinstance(meta, dict):
                                     model_info['civitai_model_id'] = meta.get('model_id')
+                                    model_info['civitai_version_id'] = meta.get('version_id')
                                     model_info['civitai_model_name'] = meta.get('model_name')
                                     model_info['version_name'] = meta.get('version_name')
                                     model_info['content_type'] = meta.get('content_type', '')
@@ -458,10 +556,18 @@ def make_installed_cards_html(installed_models):
         size_str = _format_size(size)
         folder = model.get('folder', '')
         thumbnail = model.get('thumbnail')
-        
+        version_name = model.get('version_name') or ''
+
+        # Build display name: "Model Name - Version Name" when version info exists
+        if version_name:
+            full_name = f"{model_name} - {version_name}"
+        else:
+            full_name = model_name
+
         # Truncate name for display
-        display_name = model_name[:35] + "..." if len(model_name) > 35 else model_name
-        esc_name = model_name.replace('"', '&quot;').replace("'", "&#39;")
+        display_name = full_name[:40] + "..." if len(full_name) > 40 else full_name
+        esc_name  = model_name.replace('"', '&quot;').replace("'", "&#39;")
+        esc_ver   = version_name.replace('"', '&quot;').replace("'", "&#39;")
         esc_folder = folder.replace('"', '&quot;')
 
         # Create image/video tag if thumbnail available
@@ -479,6 +585,11 @@ def make_installed_cards_html(installed_models):
 
         # Create card - click directly opens model info
         # Only add data-model-id if we have a valid ID
+        version_subtitle = (
+            f'<div class="civ-card-version" title="{esc_ver}">{version_name}</div>'
+            if version_name else ""
+        )
+
         card = f'''<div class="civ-card civ-installed-card{' civ-has-civitai-id' if model_id else ''}"
                         data-model-id="{model_id if model_id else ''}"
                         data-model-name="{esc_name}"
@@ -486,7 +597,8 @@ def make_installed_cards_html(installed_models):
                         data-folder="{esc_folder}"
                         data-content-type="{content_type}">
             {media_tag}
-            <div class="civ-card-name" title="{esc_name}">{display_name}</div>
+            <div class="civ-card-name" title="{full_name}">{display_name}</div>
+            {version_subtitle}
             <div class="civ-card-meta">{size_str}{f' • {folder}' if folder else ''}</div>
         </div>'''
         

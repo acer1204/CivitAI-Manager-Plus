@@ -13,6 +13,7 @@ from modules import script_callbacks, shared
 from modules.paths import models_path
 from cb_api import (
     CivitAIClient, make_model_cards_html, scan_installed_models,
+    flatten_to_version_items,
     get_model_folder, build_install_path, clean_folder_name,
     load_favorites, save_favorites, toggle_favorite, CONTENT_TYPE_FOLDERS
 )
@@ -30,6 +31,7 @@ _selected_model_ids = set()  # track selected model IDs for batch download
 _installed_files = set()
 _installed_hashes = set()
 _installed_model_ids = set()
+_last_base_model_filter = []   # base_model filter used in the last search
 _page_cursors = {}  # page_number -> nextCursor from that page's response
 
 # Local model info storage - use extension directory for reliability
@@ -278,7 +280,7 @@ def _refresh_installed():
 
 def _do_search_internal(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, page):
     """Internal search that stores results."""
-    global _current_page, _total_pages, _last_search_items, _page_cursors
+    global _current_page, _total_pages, _last_search_items, _page_cursors, _last_base_model_filter
 
     _current_page = page
 
@@ -313,9 +315,12 @@ def _do_search_internal(query, search_type, content_type, base_model, sort_type,
             _total_pages = page  # This is the last page
 
     items = result.get("items", [])
-    _last_search_items = items
+    # Store base model filter for select-all / download logic
+    _last_base_model_filter = base_model if isinstance(base_model, list) else ([base_model] if base_model else [])
+    # Expand multi-version models into per-version cards
+    _last_search_items = flatten_to_version_items(items, _last_base_model_filter)
 
-    html = make_model_cards_html(items, _installed_hashes, _installed_files, installed_model_ids=_installed_model_ids)
+    html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, installed_model_ids=_installed_model_ids)
 
     page_display = f"Page {_current_page} / {_total_pages}" if meta.get("totalPages") else f"Page {_current_page}"
     return html, page_display
@@ -453,31 +458,45 @@ def on_version_change(version_name, model_id_str):
 # --- Select All / Download Selected ---
 
 def do_select_all():
-    """Toggle select all — if any selected, deselect all; otherwise select all non-installed models."""
+    """Toggle select all — if any selected, deselect all; otherwise select all non-installed cards."""
     global _selected_model_ids
-    
+
     if _selected_model_ids:
         _selected_model_ids.clear()
     else:
-        # Only select non-installed models
         for item in _last_search_items:
-            if item.get("modelVersions"):
-                model_id = str(item.get("id", ""))
-                # Check if this model is installed
-                is_installed = False
+            if not item.get("modelVersions"):
+                continue
+
+            model_id     = str(item.get("id", ""))
+            model_id_int = item.get("id")
+            is_version_item = "_version_id" in item
+
+            if is_version_item:
+                version_id    = str(item.get("_version_id", ""))
+                selection_key = f"{model_id}:{version_id}"
+                check_files   = item.get("_files", [])
+            else:
+                selection_key = model_id
+                check_files   = []
                 for v in item.get("modelVersions", []):
-                    for f in v.get("files", []):
-                        sha = f.get("hashes", {}).get("SHA256", "").upper()
-                        if sha and sha in _installed_hashes:
-                            is_installed = True
-                            break
-                    if is_installed:
+                    check_files.extend(v.get("files", []))
+
+            # Check installed status
+            is_installed = False
+            if model_id_int and model_id_int in _installed_model_ids:
+                is_installed = True
+            if not is_installed:
+                for f in check_files:
+                    sha   = f.get("hashes", {}).get("SHA256", "").upper()
+                    fname = f.get("name", "").lower()
+                    if (sha and sha in _installed_hashes) or fname in _installed_files:
+                        is_installed = True
                         break
-                
-                if not is_installed:
-                    _selected_model_ids.add(model_id)
-    
-    # Return updated cards HTML with selection state
+
+            if not is_installed:
+                _selected_model_ids.add(selection_key)
+
     html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids, _installed_model_ids)
     status = f"Selected {len(_selected_model_ids)} models" if _selected_model_ids else "Deselected all"
     return gr.update(value=html), status
@@ -498,8 +517,8 @@ def do_download_selected(save_local_info=False):
         yield gr.update(value='<div class="civ-dl-empty">No models selected</div>'), ""
         return
 
-    model_ids = list(_selected_model_ids)
-    total = len(model_ids)
+    selection_keys = list(_selected_model_ids)
+    total = len(selection_keys)
     auto_organize = getattr(shared.opts, "civitai_auto_organize", True)
     added = 0
     skipped = []
@@ -508,11 +527,17 @@ def do_download_selected(save_local_info=False):
     yield gr.update(value=dl_manager.get_status_html()), f"⏳ Queuing {total} models..."
 
     # Queue all models for download
-    for i, mid in enumerate(model_ids):
+    for i, key in enumerate(selection_keys):
+        # Parse selection key: "model_id:version_id" or plain "model_id"
+        if ':' in str(key):
+            mid_str, vid_str = str(key).split(':', 1)
+        else:
+            mid_str, vid_str = str(key), None
+
         try:
-            data = api.get_model(int(mid))
+            data = api.get_model(int(mid_str))
             if not data:
-                skipped.append((f"ID:{mid}", "Not found"))
+                skipped.append((f"ID:{mid_str}", "Not found"))
                 continue
 
             model_name = data.get("name", "Unknown")
@@ -523,7 +548,14 @@ def do_download_selected(save_local_info=False):
                 skipped.append((model_name, "No versions"))
                 continue
 
-            version = versions[0]
+            # Pick the specific version if version_id is encoded in the key
+            if vid_str:
+                version = next((v for v in versions if str(v.get("id", "")) == vid_str), None)
+                if not version:
+                    version = versions[0]  # fallback
+            else:
+                version = versions[0]
+
             files = version.get("files", [])
             primary = next((f for f in files if f.get("primary")), files[0] if files else None)
             if not primary:
@@ -552,7 +584,8 @@ def do_download_selected(save_local_info=False):
                 install_path=install_path,
                 model_name=model_name,
                 version_name=version.get("name", ""),
-                model_id=int(mid),
+                model_id=int(mid_str),
+                version_id=int(vid_str) if vid_str else 0,
                 sha256=primary.get("hashes", {}).get("SHA256", ""),
                 preview_url=preview_url,
                 preview_type=preview_type,
@@ -566,13 +599,14 @@ def do_download_selected(save_local_info=False):
                 yield gr.update(value=dl_manager.get_status_html()), \
                     f"⏳ Queued {added} / {total} models..."
         except Exception as e:
-            skipped.append((f"ID:{mid}", str(e)))
+            skipped.append((f"ID:{mid_str}", str(e)))
 
     # Clear selection
     _selected_model_ids.clear()
 
-    # Save model info locally in background (doesn't block downloads)
-    if save_local_info and model_ids:
+    # Save model info locally in background — deduplicate model IDs
+    if save_local_info and selection_keys:
+        unique_model_ids = list({k.split(':')[0] if ':' in str(k) else str(k) for k in selection_keys})
         def _bg_save_all(ids):
             count = 0
             for mid in ids:
@@ -583,7 +617,7 @@ def do_download_selected(save_local_info=False):
                 except Exception:
                     pass
             print(f"[DEBUG] Background save complete: {count}/{len(ids)} model info saved", file=sys.stderr)
-        threading.Thread(target=_bg_save_all, args=(list(model_ids),), daemon=True).start()
+        threading.Thread(target=_bg_save_all, args=(unique_model_ids,), daemon=True).start()
 
     # Final summary
     status_parts = []
@@ -740,19 +774,21 @@ def do_show_fav_btn(model_id_str):
     return gr.update(visible=bool(model_id_str))
 
 
-def do_toggle_card_selection(model_id_str):
-    """Toggle selection state for a single model card."""
+def do_toggle_card_selection(selection_key_str):
+    """Toggle selection state for a single model card.
+    selection_key_str is either 'model_id' (legacy) or 'model_id:version_id' (version item).
+    """
     global _selected_model_ids
-    
-    if not model_id_str:
+
+    if not selection_key_str:
         return gr.update(value=get_favorites_html())
-    
-    model_id_str = str(model_id_str)
-    if model_id_str in _selected_model_ids:
-        _selected_model_ids.discard(model_id_str)
+
+    selection_key_str = str(selection_key_str)
+    if selection_key_str in _selected_model_ids:
+        _selected_model_ids.discard(selection_key_str)
     else:
-        _selected_model_ids.add(model_id_str)
-    
+        _selected_model_ids.add(selection_key_str)
+
     # Re-render cards with updated selection
     html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids, _installed_model_ids)
     return gr.update(value=html)
