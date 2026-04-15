@@ -17,11 +17,14 @@ document.addEventListener('click', function(e) {
     if (!card) return;
     if (e.target.closest('.civ-card-checkbox')) return;
 
-    const modelId = card.dataset.modelId;
+    const modelId   = card.dataset.modelId;
+    const versionId = card.dataset.versionId;
     if (modelId) {
-        // Trigger model info popup via the same mechanism as installed cards
+        // Encode version hint so popup can filter to the correct version.
+        // Format: "modelId:versionId_randomSuffix"  or  "modelId_randomSuffix"
         const randomSuffix = '_' + Math.random().toString(36).substring(2, 8);
-        updateGradioTextbox('#civ_model_select', modelId + randomSuffix);
+        const idKey = versionId ? `${modelId}:${versionId}` : modelId;
+        updateGradioTextbox('#civ_model_select', idKey + randomSuffix);
 
         document.querySelectorAll('.civ-card.civ-selected').forEach(c => c.classList.remove('civ-selected'));
         card.classList.add('civ-selected');

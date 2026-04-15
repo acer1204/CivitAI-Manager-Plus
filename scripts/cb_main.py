@@ -812,16 +812,24 @@ def get_model_info_html(model_id_str):
         print(f"[DEBUG] Returning gr.update()", file=sys.stderr)
         return gr.update()  # Keep current HTML, don't show error
     
-    # Clean the model ID string - handle format: "modelId_randomSuffix" or just "modelId"
+    # Clean the model ID string.
+    # Supported formats:
+    #   "modelId_randomSuffix"           → model only
+    #   "modelId:versionId_randomSuffix" → model + version hint
+    #   "modelId"                        → plain (installed tab)
     model_id_str = str(model_id_str)
-    if '_' in model_id_str:
-        # Extract model ID from format like "2428747_abc123"
-        model_id_clean = model_id_str.split('_')[0]
+    # Strip random suffix (everything after last '_')
+    base = model_id_str.rsplit('_', 1)[0] if '_' in model_id_str else model_id_str
+
+    version_id_hint = None
+    if ':' in base:
+        model_id_clean, version_id_hint = base.split(':', 1)
+        model_id_clean = ''.join(c for c in model_id_clean if c.isdigit())
+        version_id_hint = ''.join(c for c in version_id_hint if c.isdigit()) or None
     else:
-        # Fallback: extract only digits
-        model_id_clean = ''.join(c for c in model_id_str if c.isdigit())
-    
-    print(f"[DEBUG] Cleaned model_id: '{model_id_clean}'", file=sys.stderr)
+        model_id_clean = ''.join(c for c in base if c.isdigit())
+
+    print(f"[DEBUG] Cleaned model_id: '{model_id_clean}', version_hint: '{version_id_hint}'", file=sys.stderr)
     
     if not model_id_clean:
         print(f"[DEBUG] No digits found in model_id_str", file=sys.stderr)
@@ -858,15 +866,20 @@ def get_model_info_html(model_id_str):
     nsfw = data.get("nsfw", False)
     versions = data.get("modelVersions", [])
 
-    # Find installed safetensors filename for LoRA tag injection
+    # Find installed safetensors filename for LoRA tag injection.
+    # Prefer exact version match when version_id_hint is available.
     _lora_filename = ""
     try:
         from cb_api import scan_installed_civitai_models
         _installed, _ = scan_installed_civitai_models()
         for _m in _installed:
-            if str(_m.get("civitai_model_id", "")) == str(model_id):
+            if str(_m.get("civitai_model_id", "")) != str(model_id):
+                continue
+            if version_id_hint and str(_m.get("civitai_version_id", "")) == version_id_hint:
                 _lora_filename = os.path.splitext(os.path.basename(_m["path"]))[0]
                 break
+            if not _lora_filename:
+                _lora_filename = os.path.splitext(os.path.basename(_m["path"]))[0]
     except Exception:
         pass
     
@@ -923,11 +936,21 @@ def get_model_info_html(model_id_str):
     parts.append('<div class="civ-tab-content civ-tab-images" id="civ-tab-images" style="display:none;">')
     parts.append('<div class="civ-tab-header"><h3>🖼️ Preview Images</h3></div>')
     
+    # Determine which versions to display throughout the popup.
+    # If a specific version was clicked, restrict to that version only.
+    if version_id_hint:
+        display_versions = [v for v in versions if str(v.get('id', '')) == version_id_hint]
+        if not display_versions:
+            display_versions = versions[:5]  # fallback if hint doesn't match
+    else:
+        display_versions = versions[:5]
+
     # Sample images with metadata - list view layout
     parts.append('<div class="civ-model-versions">')
-    
+
     if versions:
-        for v in versions[:5]:  # Limit to 5 versions
+
+        for v in display_versions:
             version_name = v.get("name", "")
             base_model = v.get("baseModel", "")
             version_id = v.get('id', '')
@@ -1085,7 +1108,7 @@ def get_model_info_html(model_id_str):
     parts.append('<div class="civ-triggers-container">')
 
     trigger_count = 0
-    for v in versions[:5]:
+    for v in display_versions:
         trained_words = v.get("trainedWords") or []
         # Each element in trainedWords is a separate trigger group (comma-separated chips inside)
         for word_group in trained_words:
