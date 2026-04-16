@@ -295,7 +295,7 @@ class DownloadManager:
     def _resolve_download_url(self, url, model_id):
         """Get the actual download URL by following CivitAI redirects.
         Tries multiple auth methods: token query param, Bearer header, and no auth."""
-        # Normalize protocol-relative URLs (//civitai.com/...) to https://
+        # Normalize protocol-relative URLs (//civitai.com/... or //civitai.red/...) to https://
         if url and url.startswith("//"):
             url = "https:" + url
 

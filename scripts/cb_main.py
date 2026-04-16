@@ -888,7 +888,7 @@ def get_model_info_html(model_id_str):
         pass
     
     # Build CivitAI URL
-    civitai_url = f"https://civitai.com/models/{model_id}"
+    civitai_url = f"https://civitai.red/models/{model_id}"
     
     parts = [f'<div class="civ-model-info">']
 

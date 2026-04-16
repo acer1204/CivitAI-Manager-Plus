@@ -18,7 +18,7 @@ except ImportError:
 
 
 class CivitAIClient:
-    BASE_URL = "https://civitai.com/api/v1"
+    BASE_URL = "https://civitai.red/api/v1"
 
     def __init__(self):
         self.session = requests.Session()
