@@ -563,6 +563,8 @@ def do_download_selected(save_local_info=False):
                 continue
 
             dl_url = primary.get("downloadUrl", "")
+            if dl_url and dl_url.startswith("//"):
+                dl_url = "https:" + dl_url
             if not dl_url:
                 skipped.append((model_name, "No download URL"))
                 continue
@@ -666,6 +668,8 @@ def start_download(model_id_str, version_name, file_index_str, install_path, sav
 
             file_data = files[file_idx]
             dl_url = file_data.get("downloadUrl", "")
+            if dl_url and dl_url.startswith("//"):
+                dl_url = "https:" + dl_url
             filename = file_data.get("name", "model.safetensors")
             sha256 = file_data.get("hashes", {}).get("SHA256", "")
 
