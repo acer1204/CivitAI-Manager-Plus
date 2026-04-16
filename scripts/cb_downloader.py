@@ -321,6 +321,9 @@ class DownloadManager:
                     location = resp.headers.get("Location", "")
                     if "login?returnUrl" in (location + resp.text):
                         continue  # Auth required, try next method
+                    # Normalize protocol-relative redirect URLs (//civitai.com/...)
+                    if location and location.startswith("//"):
+                        location = "https:" + location
                     return location if location else try_url
                 elif resp.status_code == 200:
                     return try_url
