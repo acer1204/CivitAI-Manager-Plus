@@ -30,6 +30,7 @@ class DownloadItem:
     model_name: str
     version_name: str
     model_id: int
+    version_id: int = 0
     sha256: str = ""
     preview_url: str = ""
     preview_type: str = "image"  # "image" or "video"
@@ -55,7 +56,7 @@ class DownloadManager:
         self._running = False
 
     def add(self, url, filename, install_path, model_name, version_name,
-            model_id, sha256="", preview_url="", preview_type="image",
+            model_id, version_id=0, sha256="", preview_url="", preview_type="image",
             published_at="", trained_words=None) -> int:
         """Add a download to the queue and ensure background processor is running."""
         with self._lock:
@@ -65,6 +66,7 @@ class DownloadManager:
                 dl_id=dl_id, url=url, filename=filename,
                 install_path=install_path, model_name=model_name,
                 version_name=version_name, model_id=model_id,
+                version_id=int(version_id) if version_id else 0,
                 sha256=sha256, preview_url=preview_url,
                 preview_type=preview_type, published_at=published_at,
                 trained_words=trained_words
@@ -293,6 +295,10 @@ class DownloadManager:
     def _resolve_download_url(self, url, model_id):
         """Get the actual download URL by following CivitAI redirects.
         Tries multiple auth methods: token query param, Bearer header, and no auth."""
+        # Normalize protocol-relative URLs (//civitai.com/... or //civitai.red/...) to https://
+        if url and url.startswith("//"):
+            url = "https:" + url
+
         api_key = getattr(opts, "civitai_api_key", "")
         base_headers = {"User-Agent": "Mozilla/5.0"}
 
@@ -315,6 +321,9 @@ class DownloadManager:
                     location = resp.headers.get("Location", "")
                     if "login?returnUrl" in (location + resp.text):
                         continue  # Auth required, try next method
+                    # Normalize protocol-relative redirect URLs (//civitai.com/...)
+                    if location and location.startswith("//"):
+                        location = "https:" + location
                     return location if location else try_url
                 elif resp.status_code == 200:
                     return try_url
@@ -345,7 +354,7 @@ class DownloadManager:
 
         # Only add auth header for CivitAI URLs, NOT for CDN pre-signed URLs
         # Pre-signed CDN URLs (cloudflarestorage, etc.) reject extra Authorization headers
-        if "civitai.com" in url:
+        if "civitai.com" in url or "civitai.red" in url:
             api_key = getattr(opts, "civitai_api_key", "")
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
@@ -390,6 +399,7 @@ class DownloadManager:
         metadata = {
             "sha256": item.sha256,
             "model_id": item.model_id,
+            "version_id": item.version_id,
             "model_name": item.model_name,
             "version_name": item.version_name,
             "download_date": time.strftime("%Y-%m-%d %H:%M:%S"),
