@@ -90,7 +90,7 @@ class CivitAIClient:
                 params["baseModels"] = base_model
 
         if query:
-            if "civitai.com" in query:
+            if "civitai.com" in query or "civitai.red" in query:
                 match = re.search(r'models/(\d+)', query)
                 if match:
                     params["ids"] = match.group(1)
