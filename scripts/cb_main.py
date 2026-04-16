@@ -6,6 +6,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import gradio as gr
+import html as html_mod
 import json
 import random
 import threading
@@ -1082,6 +1083,8 @@ def get_model_info_html(model_id_str):
                     geninfo_escaped = geninfo_str.replace(chr(34), "&quot;").replace(chr(10), "&#10;") if geninfo_str else ''
 
                     lora_name_escaped = _lora_filename.replace('"', '&quot;')
+                    prompt_display = html_mod.escape(prompt_text).replace('\n', '<br>') if prompt_text else '<span class="civ-no-prompt">No prompt data</span>'
+                    neg_display = html_mod.escape(neg_prompt_text).replace('\n', '<br>') if neg_prompt_text else '<span class="civ-no-prompt">No negative prompt data</span>'
                     parts.append(f'''<div class="civ-sample-item-list" data-img-url="{url}">
                         <div class="civ-sample-img-container">
                             <img class="civ-sample-img-list" loading="lazy" src="{url}" data-url="{url}">
@@ -1089,11 +1092,11 @@ def get_model_info_html(model_id_str):
                         <div class="civ-sample-prompts">
                             <div class="civ-prompt-block">
                                 <div class="civ-prompt-label">Prompt <button class="civ-copy-btn" data-copy-type="prompt" data-copy="{prompt_escaped}">📋 Copy</button></div>
-                                <div class="civ-prompt-text">{prompt_text if prompt_text else '<span class="civ-no-prompt">No prompt data</span>'}</div>
+                                <div class="civ-prompt-text">{prompt_display}</div>
                             </div>
                             <div class="civ-prompt-block">
                                 <div class="civ-prompt-label">Negative prompt <button class="civ-copy-btn" data-copy-type="negative" data-copy="{neg_prompt_escaped}">📋 Copy</button></div>
-                                <div class="civ-prompt-text">{neg_prompt_text if neg_prompt_text else '<span class="civ-no-prompt">No negative prompt data</span>'}</div>
+                                <div class="civ-prompt-text">{neg_display}</div>
                             </div>
                         </div>
                         <div class="civ-sample-actions">
