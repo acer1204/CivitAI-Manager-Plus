@@ -347,7 +347,7 @@ class DownloadManager:
 
         # Only add auth header for CivitAI URLs, NOT for CDN pre-signed URLs
         # Pre-signed CDN URLs (cloudflarestorage, etc.) reject extra Authorization headers
-        if "civitai.com" in url:
+        if "civitai.com" in url or "civitai.red" in url:
             api_key = getattr(opts, "civitai_api_key", "")
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
