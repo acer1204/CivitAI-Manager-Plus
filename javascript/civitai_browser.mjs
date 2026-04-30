@@ -355,30 +355,60 @@ function bindSendToTxt2ImgButtons() {
     });
 }
 
+function _copyTextToClipboard(text) {
+    // Modern Clipboard API (requires HTTPS or localhost with permission)
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        return navigator.clipboard.writeText(text);
+    }
+    // Fallback: execCommand (works on HTTP without special permissions)
+    return new Promise((resolve, reject) => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        try {
+            ta.focus();
+            ta.select();
+            if (document.execCommand('copy')) {
+                resolve();
+            } else {
+                reject(new Error('execCommand copy failed'));
+            }
+        } catch (err) {
+            reject(err);
+        } finally {
+            document.body.removeChild(ta);
+        }
+    });
+}
+
 function bindCopyButtons() {
     document.querySelectorAll('.civ-copy-btn').forEach(btn => {
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
             e.preventDefault();
-            
+
             const copyText = this.dataset.copy;
             if (!copyText) return;
-            
-            // Decode HTML entities
+
+            // Decode HTML entities (browser may have already decoded, but handle both cases)
             const decodedText = copyText.replace(/&#10;/g, '\n').replace(/&quot;/g, '"');
-            
-            // Copy to clipboard
-            navigator.clipboard.writeText(decodedText).then(() => {
-                // Visual feedback
-                const originalText = this.textContent;
-                this.textContent = '✅ Copied!';
-                setTimeout(() => {
-                    this.textContent = originalText;
-                }, 1500);
-            }).catch(err => {
-                console.error('Failed to copy:', err);
-                alert('Failed to copy to clipboard');
-            });
+            const targetBtn = this;
+
+            try {
+                _copyTextToClipboard(decodedText).then(() => {
+                    const originalText = targetBtn.textContent;
+                    targetBtn.textContent = '✅ Copied!';
+                    setTimeout(() => { targetBtn.textContent = originalText; }, 1500);
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    alert('複製失敗，請手動複製。\n' + decodedText);
+                });
+            } catch (err) {
+                // navigator.clipboard threw synchronously (undefined / permission error)
+                console.error('Copy error:', err);
+                alert('複製失敗，請手動複製。\n' + decodedText);
+            }
         });
     });
 }
