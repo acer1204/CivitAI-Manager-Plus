@@ -2,7 +2,6 @@
 
 import requests
 import json
-import sys
 import time
 import os
 import re
@@ -333,8 +332,12 @@ def make_model_cards_html(items, installed_hashes=None, installed_files=None, se
                 if (sha and sha in installed_hashes) or fname in installed_files:
                     is_installed = True
                     break
-            # Fallback: model_id match (commission models with empty files[])
-            if not is_installed and model_id_int and model_id_int in installed_model_ids:
+            # Fallback: model_id match — but ONLY when this version has no files
+            # at all (commission / restricted / Early Access models that can't be
+            # matched by SHA or filename). Multi-version models DO have files per
+            # version, so applying this fallback would mark every version as
+            # installed once any single version of the model is downloaded.
+            if not is_installed and not check_files and model_id_int and model_id_int in installed_model_ids:
                 is_installed = True
         else:
             if model_id_int and model_id_int in installed_model_ids:
@@ -462,16 +465,6 @@ def invalidate_installed_scan_cache():
     _installed_civitai_cache = None
 
 
-def _timing_log_api(msg):
-    try:
-        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'timing.log')
-        from datetime import datetime
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {msg}\n")
-    except Exception:
-        pass
-
-
 def scan_installed_civitai_models(force=False):
     """Scan models and embeddings directories for installed models.
     Returns list of dicts with model info including civitai_model_id if available.
@@ -479,9 +472,7 @@ def scan_installed_civitai_models(force=False):
     Result is cached in-process; pass force=True to bypass the cache."""
     global _installed_civitai_cache
     if not force and _installed_civitai_cache is not None:
-        _timing_log_api(f"scan_installed_civitai_models: CACHE HIT ({len(_installed_civitai_cache[0])} models)")
         return _installed_civitai_cache
-    _timing_log_api(f"scan_installed_civitai_models: CACHE MISS, walking disk... (force={force})")
 
     installed_models = []
     seen_paths = set()
@@ -573,17 +564,24 @@ def scan_installed_civitai_models(force=False):
     return result
 
 
-def make_installed_cards_html(installed_models):
-    """Generate HTML for installed models grid with preview images."""
+def make_installed_cards_html(installed_models, selected_paths=None):
+    """Generate HTML for installed models grid with preview images.
+
+    selected_paths: optional set of file paths that should render with the
+    selection checkbox in the 'checked' state."""
     if not installed_models:
         return '<div class="civ-no-results">No models found. Download models from the Browse tab.</div>'
-    
+
+    selected_paths = selected_paths or set()
     parts = ['<div class="civ-card-grid">']
     
     for model in installed_models:
         filename = model.get('filename', 'Unknown')
         content_type = model.get('content_type', '')
         model_id = model.get('civitai_model_id')
+        version_id = model.get('civitai_version_id') or ''
+        model_path = model.get('path', '')
+        is_selected = model_path in selected_paths
         model_name = model.get('civitai_model_name') or os.path.splitext(filename)[0]
         size = model.get('size', 0)
         size_str = _format_size(size)
@@ -623,12 +621,20 @@ def make_installed_cards_html(installed_models):
             if version_name else ""
         )
 
-        card = f'''<div class="civ-card civ-installed-card{' civ-has-civitai-id' if model_id else ''}"
+        # Path goes through data attr verbatim — escape quotes only
+        esc_path = model_path.replace('"', '&quot;')
+        checkbox_class = "civ-installed-checkbox checked" if is_selected else "civ-installed-checkbox"
+        selected_card_class = " civ-card-selected" if is_selected else ""
+
+        card = f'''<div class="civ-card civ-installed-card{' civ-has-civitai-id' if model_id else ''}{selected_card_class}"
                         data-model-id="{model_id if model_id else ''}"
+                        data-version-id="{version_id}"
                         data-model-name="{esc_name}"
                         data-filename="{esc_name}"
                         data-folder="{esc_folder}"
+                        data-path="{esc_path}"
                         data-content-type="{content_type}">
+            <div class="{checkbox_class}" data-path="{esc_path}" title="Select for delete"></div>
             {media_tag}
             <div class="civ-card-name" title="{full_name}">{display_name}</div>
             {version_subtitle}

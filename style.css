@@ -147,6 +147,158 @@
     background-repeat: no-repeat;
 }
 
+/* Installed Card - Delete Selection Checkbox (top-LEFT, red accent) */
+.civ-installed-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 22px;
+    height: 22px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 2px solid rgba(255, 255, 255, 0.6);
+    border-radius: 4px;
+    cursor: pointer;
+    z-index: 5;
+    transition: background 0.15s, border-color 0.15s;
+}
+.civ-installed-checkbox:hover {
+    border-color: #ef4444;
+}
+.civ-installed-checkbox.checked {
+    background: #ef4444;
+    border-color: #ef4444;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/%3E%3C/svg%3E");
+    background-size: 16px;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+.civ-installed-card.civ-card-selected {
+    outline: 2px solid #ef4444;
+    outline-offset: -2px;
+}
+
+/* Installed Tab - constrain the cards area to a viewport-relative height
+   so a folder with many models scrolls in place instead of stretching the
+   page. 85vh roughly matches the folder tree's lower edge (incl. Refresh
+   Folder Tree button) on typical 1080p/1440p layouts. */
+#civ_installed_html {
+    max-height: 110vh;
+    overflow-y: auto;
+    padding-right: 4px;  /* leave room so the scrollbar doesn't sit on cards */
+}
+/* Installed cards left-aligned (Browse/Favorites stay centered) */
+#civ_installed_html .civ-card-grid {
+    justify-content: flex-start;
+}
+
+/* Installed Tab - action buttons should match the Sort-by dropdown height
+   AND start at the same Y coordinate. Two things to handle:
+     1. Gradio buttons by default get extra vertical padding making them
+        much taller than the dropdown. Force exact pixel height.
+     2. The left column has a "Sort by" label above its dropdown that
+        consumes ~22px; the right column has no label, so push the action
+        row down to align with the dropdown (not the label). */
+#civ_installed_actions {
+    margin-top: 22px;
+    align-items: center;
+}
+#civ_installed_delete_btn,
+#civ_installed_select_all_btn,
+#civ_sidebar_toggle_btn,
+#civ_installed_delete_btn button,
+#civ_installed_select_all_btn button,
+#civ_sidebar_toggle_btn button {
+    height: 40px !important;
+    min-height: 40px !important;
+    max-height: 40px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+#civ_sidebar_toggle_btn,
+#civ_sidebar_toggle_btn button {
+    width: 44px !important;
+    min-width: 44px !important;
+    font-size: 1.2em;
+}
+
+/* Collapsible Folders sidebar — toggled from JS (#civ_sidebar_toggle_btn) */
+#civ_folder_sidebar {
+    transition: opacity 0.18s ease;
+}
+/* Hidden state: brute-force collapse the column so it surrenders its
+   flex/grid width and lets cards expand to full row width. Gradio's
+   own .block / .col styles use min-width/flex that override a bare
+   `display:none`, so we override everything. */
+#civ_folder_sidebar.civ-sidebar-hidden {
+    display: none !important;
+    visibility: hidden !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    flex: 0 0 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+}
+#civ_folder_sidebar.civ-sidebar-overlay {
+    /* display: block (not flex/grid) so descendants stack vertically via
+       the natural block flow — Gradio adds its own flex wrappers at
+       multiple nesting levels that ignore flex-direction overrides on
+       just the outer element. Block flow is authoritative. */
+    display: block !important;
+    box-sizing: border-box;
+
+    position: absolute;
+    top: 60px;          /* sits just under the action row */
+    left: 12px;
+    width: 340px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--background-fill-secondary, #1f2937);
+    border: 1px solid var(--border-color-primary, #374151);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    padding: 14px;
+    z-index: 200;
+    animation: civSidebarSlideIn 0.18s ease;
+}
+/* Direct children only — make each child block-level so they stack as
+   rows. Use natural width (auto + max 100%) so the dropdown and button
+   don't get artificially stretched wider than the folder-tree items.
+   Don't recurse deeper or it'd break the dropdown's internal flex. */
+#civ_folder_sidebar.civ-sidebar-overlay > * {
+    display: block !important;
+    width: auto !important;
+    max-width: 100% !important;
+    flex: 0 0 auto !important;
+    float: none !important;
+    clear: both !important;
+    margin: 0 0 8px 0 !important;
+    box-sizing: border-box;
+}
+#civ_folder_sidebar.civ-sidebar-overlay > *:last-child {
+    margin-bottom: 0 !important;
+}
+/* Inside the overlay, the folder tree should expand fully — let the
+   overlay panel's own scrollbar handle overflow, not the tree's. */
+#civ_folder_sidebar.civ-sidebar-overlay .civ-folder-tree {
+    max-height: none !important;
+    overflow-y: visible !important;
+    max-width: none !important;
+}
+/* In overlay mode the popup is narrow, so the "### Folders" title wraps
+   to a second line. The title is redundant in this context (the hamburger
+   itself signals what this popup is), so hide it. Inline mode keeps it. */
+#civ_folder_sidebar.civ-sidebar-overlay #civ_folders_title {
+    display: none;
+}
+@keyframes civSidebarSlideIn {
+    from { transform: translateX(-12px); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+}
+
 /* Status Messages */
 .civ-no-results, .civ-error {
     text-align: center;

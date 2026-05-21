@@ -63,23 +63,75 @@ document.addEventListener('click', function(e) {
     }
 });
 
+// --- Installed Card Checkbox Click: Toggle selection via Gradio bridge ---
+// Bound BEFORE the card-click handler below so stopPropagation prevents the
+// popup from opening when the user clicks the checkbox.
+document.addEventListener('click', function(e) {
+    const checkbox = e.target.closest('.civ-installed-checkbox');
+    if (!checkbox) return;
+
+    e.stopPropagation();
+    e.preventDefault();
+
+    const path = checkbox.dataset.path;
+    if (!path) return;
+
+    // Toggle visual state immediately (server will re-render canonically)
+    checkbox.classList.toggle('checked');
+    const card = checkbox.closest('.civ-installed-card');
+    if (card) card.classList.toggle('civ-card-selected');
+
+    // Send "path_random" to the bridge so Gradio fires .change every click
+    const randomSuffix = '_' + Math.random().toString(36).substring(2, 8);
+    updateGradioTextbox('#civ_installed_select_toggle', path + randomSuffix);
+}, true);  // capture phase — beats the card-click listener that opens popup
+
+// --- Installed - Delete Selected button: confirm before triggering Gradio click ---
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('#civ_installed_delete_btn');
+    if (!btn) return;
+
+    const selectedCount = document.querySelectorAll('.civ-installed-checkbox.checked').length;
+    if (selectedCount === 0) {
+        e.stopPropagation();
+        e.preventDefault();
+        alert('No models selected. Tick the checkbox on a card first.');
+        return;
+    }
+    const ok = confirm(`Permanently delete ${selectedCount} model(s)?\n\nThis removes the model file, sidecar (.json / .preview.png / .civitai.info), and — when no other version of the same model remains — the cached "Save Local" info.`);
+    if (!ok) {
+        e.stopPropagation();
+        e.preventDefault();
+    }
+    // If confirmed: let the click bubble through to Gradio's button binding.
+}, true);
+
 // --- Installed Model Card Click - Directly open Model Info ---
 document.addEventListener('click', function(e) {
     const card = e.target.closest('.civ-installed-card');
     if (!card) return;
 
+    // Already handled by checkbox-specific listener above — bail out here too
+    // in case capture-phase ordering changes.
+    if (e.target.closest('.civ-installed-checkbox')) return;
+
     const modelId = card.dataset.modelId;
+    const versionId = card.dataset.versionId;
     const modelName = card.dataset.modelName || card.dataset.filename;
 
     // Check if modelId is valid (not empty or undefined)
     if (modelId && modelId.trim() !== '') {
         // Has CivitAI ID - open model info popup directly
         const modelIdInput = document.querySelector('#civ_installed_model_id textarea');
-        
+
         if (modelIdInput) {
-            // Force change by adding random suffix to ensure Gradio detects the change
+            // Force change by adding random suffix to ensure Gradio detects the change.
+            // Encode version hint so popup restricts to the version this file is from —
+            // otherwise the popup shows the first 5 versions of the model, with the
+            // wrong preview images and trigger words for multi-version models.
             const randomSuffix = '_' + Math.random().toString(36).substring(2, 8);
-            const uniqueValue = modelId + randomSuffix;
+            const idKey = (versionId && versionId.trim() !== '') ? `${modelId}:${versionId}` : modelId;
+            const uniqueValue = idKey + randomSuffix;
             
             modelIdInput.value = uniqueValue;
             
@@ -109,17 +161,64 @@ document.addEventListener('click', function(e) {
 document.addEventListener('click', function(e) {
     const folderItem = e.target.closest('.civ-folder-item, .civ-folder-subitem');
     if (!folderItem) return;
-    
+
     const folder = folderItem.dataset.folder || '';
-    
+
     // Update visual selection
     document.querySelectorAll('.civ-folder-item, .civ-folder-subitem').forEach(el => {
         el.classList.remove('civ-folder-selected');
     });
     folderItem.classList.add('civ-folder-selected');
-    
+
     // Trigger filter
     updateGradioTextbox('#civ_installed_filter_folder', folder);
+
+    // If sidebar is in overlay mode, auto-close it so the user can see the
+    // newly-filtered cards without manually toggling the hamburger again.
+    const sidebar = document.getElementById('civ_folder_sidebar');
+    if (sidebar && sidebar.classList.contains('civ-sidebar-overlay')) {
+        sidebar.classList.remove('civ-sidebar-overlay');
+        sidebar.classList.add('civ-sidebar-hidden');
+    }
+});
+
+// --- Folders sidebar toggle (hamburger) ---
+// State machine:
+//   initial      → inline (no class on sidebar)
+//   1st click    → hidden                          (no class → civ-sidebar-hidden)
+//   2nd click    → overlay (floats over cards)     (civ-sidebar-hidden → civ-sidebar-overlay)
+//   3rd click    → hidden                          (overlay → hidden)
+//   … toggles between hidden and overlay from then on; we never return to inline.
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('#civ_sidebar_toggle_btn');
+    if (!btn) return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    const sidebar = document.getElementById('civ_folder_sidebar');
+    if (!sidebar) return;
+
+    if (sidebar.classList.contains('civ-sidebar-hidden')) {
+        // hidden → overlay
+        sidebar.classList.remove('civ-sidebar-hidden');
+        sidebar.classList.add('civ-sidebar-overlay');
+    } else {
+        // inline OR overlay → hidden
+        sidebar.classList.remove('civ-sidebar-overlay');
+        sidebar.classList.add('civ-sidebar-hidden');
+    }
+});
+
+// Click-outside-to-close for the overlay state.
+document.addEventListener('click', function(e) {
+    const sidebar = document.getElementById('civ_folder_sidebar');
+    if (!sidebar || !sidebar.classList.contains('civ-sidebar-overlay')) return;
+    // Click inside the sidebar itself, or on the hamburger, is handled elsewhere.
+    if (sidebar.contains(e.target)) return;
+    if (e.target.closest('#civ_sidebar_toggle_btn')) return;
+
+    sidebar.classList.remove('civ-sidebar-overlay');
+    sidebar.classList.add('civ-sidebar-hidden');
 });
 
 // --- Save Local Checkbox in Model Info Popup ---

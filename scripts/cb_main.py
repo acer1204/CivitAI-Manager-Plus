@@ -29,6 +29,7 @@ _current_page = 1
 _total_pages = 1
 _last_search_items = []   # store search results for Select All
 _selected_model_ids = set()  # track selected model IDs for batch download
+_selected_installed_paths = set()  # track selected installed model paths for batch delete
 _installed_files = set()
 _installed_hashes = set()
 _installed_model_ids = set()
@@ -249,6 +250,141 @@ def _delete_model_info_local(model_id):
             print(f"[DEBUG] Deleted local model info for {model_id}", file=sys.stderr)
     except Exception as e:
         print(f"[DEBUG] Failed to delete model info {model_id}: {e}", file=sys.stderr)
+
+
+def _strip_random_suffix(value):
+    """Hidden textboxes get a random suffix to force Gradio change detection.
+    Strip everything from the last '_' onward."""
+    if not value:
+        return ""
+    s = str(value)
+    return s.rsplit('_', 1)[0] if '_' in s else s
+
+
+def do_select_all_installed(filter_folder, sort_label):
+    """Select every installed card currently visible (i.e. matching filter_folder).
+    With an empty filter, selects ALL installed models — handy for mass cleanup."""
+    from cb_api import scan_installed_civitai_models
+    installed, _ = scan_installed_civitai_models()
+
+    if filter_folder:
+        normalized = filter_folder.replace('\\', '/')
+        visible = [
+            m for m in installed
+            if m.get('folder', '').replace('\\', '/').startswith(normalized)
+        ]
+    else:
+        visible = installed
+
+    # If everything visible is already selected, treat this as "toggle off" —
+    # gives the user a quick way to clear the selection without per-card clicks.
+    visible_paths = {m.get('path') for m in visible if m.get('path')}
+    if visible_paths and visible_paths.issubset(_selected_installed_paths):
+        _selected_installed_paths.difference_update(visible_paths)
+    else:
+        _selected_installed_paths.update(visible_paths)
+
+    sort_key = {
+        "Publish Date (Newest)": "date_desc",
+        "Publish Date (Oldest)": "date_asc",
+        "Filename (A-Z)": "name_asc",
+        "Filename (Z-A)": "name_desc",
+    }.get(sort_label, "date_desc")
+    return gr.update(value=get_installed_models_html(filter_folder, sort_key))
+
+
+def do_toggle_installed_selection(path_with_suffix, filter_folder, sort_label):
+    """Toggle a path in the installed-selection set, then re-render the cards.
+
+    The hidden textbox carries 'path_random' so Gradio fires on every click
+    even when the user re-clicks the same checkbox; we drop the suffix here.
+    """
+    raw = _strip_random_suffix(path_with_suffix)
+    if raw and raw in _selected_installed_paths:
+        _selected_installed_paths.discard(raw)
+    elif raw:
+        _selected_installed_paths.add(raw)
+    sort_key = {
+        "Publish Date (Newest)": "date_desc",
+        "Publish Date (Oldest)": "date_asc",
+        "Filename (A-Z)": "name_asc",
+        "Filename (Z-A)": "name_desc",
+    }.get(sort_label, "date_desc")
+    return gr.update(value=get_installed_models_html(filter_folder, sort_key))
+
+
+def do_delete_selected_installed(filter_folder, sort_label):
+    """Delete every model in _selected_installed_paths along with sidecars and
+    (conditionally) the cached local model-info directory."""
+    from cb_downloader import delete_model
+    from cb_api import scan_installed_civitai_models, invalidate_installed_scan_cache
+
+    paths = list(_selected_installed_paths)
+    if not paths:
+        # Nothing selected — keep current HTML, surface a status line
+        sort_key = {
+            "Publish Date (Newest)": "date_desc",
+            "Publish Date (Oldest)": "date_asc",
+            "Filename (A-Z)": "name_asc",
+            "Filename (Z-A)": "name_desc",
+        }.get(sort_label, "date_desc")
+        return (
+            gr.update(value=get_installed_models_html(filter_folder, sort_key)),
+            gr.update(value="No models selected."),
+        )
+
+    # Collect model_ids for each path so we know which local-info caches to drop.
+    # Only drop the cached info when ZERO files with that model_id remain after delete.
+    pre_delete_models, _ = scan_installed_civitai_models()
+    path_to_mid = {
+        m.get('path'): m.get('civitai_model_id')
+        for m in pre_delete_models if m.get('path')
+    }
+    mids_being_deleted = {path_to_mid.get(p) for p in paths if path_to_mid.get(p)}
+
+    deleted = 0
+    failed = []
+    for p in paths:
+        try:
+            if delete_model(p):
+                deleted += 1
+            else:
+                failed.append(os.path.basename(p))
+        except Exception as e:
+            failed.append(f"{os.path.basename(p)} ({e})")
+
+    # delete_model invalidates the scan cache; re-scan to see what's left
+    invalidate_installed_scan_cache()
+    post_delete_models, _ = scan_installed_civitai_models()
+    remaining_mids = {m.get('civitai_model_id') for m in post_delete_models if m.get('civitai_model_id')}
+
+    # Drop cached local-info for any model_id that no longer has files on disk
+    local_info_dropped = 0
+    for mid in mids_being_deleted:
+        if mid and mid not in remaining_mids:
+            _delete_model_info_local(mid)
+            local_info_dropped += 1
+
+    _selected_installed_paths.clear()
+
+    sort_key = {
+        "Publish Date (Newest)": "date_desc",
+        "Publish Date (Oldest)": "date_asc",
+        "Filename (A-Z)": "name_asc",
+        "Filename (Z-A)": "name_desc",
+    }.get(sort_label, "date_desc")
+
+    parts = [f"Deleted {deleted} model(s)"]
+    if local_info_dropped:
+        parts.append(f"cleared {local_info_dropped} cached info folder(s)")
+    if failed:
+        parts.append(f"failed: {', '.join(failed[:5])}{'…' if len(failed) > 5 else ''}")
+    status = " | ".join(parts)
+
+    return (
+        gr.update(value=get_installed_models_html(filter_folder, sort_key)),
+        gr.update(value=status),
+    )
 
 
 BASE_MODELS = [
@@ -686,7 +822,9 @@ def start_download(model_id_str, version_name, file_index_str, install_path, sav
             dl_manager.add(
                 url=dl_url, filename=filename, install_path=install_path,
                 model_name=model_name, version_name=version_name,
-                model_id=int(model_id_str), sha256=sha256,
+                model_id=int(model_id_str),
+                version_id=int(v.get("id") or 0),
+                sha256=sha256,
                 preview_url=preview_url, preview_type=preview_type,
                 published_at=v.get("publishedAt", ""),
                 trained_words=v.get("trainedWords", [])
@@ -1194,31 +1332,15 @@ def fetch_and_send_image_metadata(image_url):
 
 # --- Installed Models Tab ---
 
-def _timing_log(msg):
-    """Append a timing log line to extensions/sd-civitai-browser-new/timing.log."""
-    try:
-        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'timing.log')
-        from datetime import datetime
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {msg}\n")
-    except Exception:
-        pass
-
-
 def get_installed_models_html(filter_folder="", sort_by="date_desc"):
     """Scan and display installed models as cards with preview.
 
     Uses the cached scan from scan_installed_civitai_models(); cache is invalidated
     on download-complete, delete, or explicit refresh, so folder/sort clicks are
     instant after the first scan."""
-    import time as _t
-    _t0 = _t.perf_counter()
-    _timing_log(f"--- get_installed_models_html(filter_folder={filter_folder!r}, sort_by={sort_by!r}) ---")
     from cb_api import scan_installed_civitai_models, make_installed_cards_html
 
     installed_models, folders = scan_installed_civitai_models()
-    _t_scan = _t.perf_counter()
-    _timing_log(f"scan_installed_civitai_models: {(_t_scan-_t0)*1000:.1f}ms (total before filter: {len(installed_models)})")
 
     # Filter by folder
     if filter_folder:
@@ -1227,8 +1349,6 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc"):
             m for m in installed_models
             if m.get('folder', '').replace('\\', '/').startswith(filter_folder_normalized)
         ]
-    _t_filter = _t.perf_counter()
-    _timing_log(f"filter '{filter_folder}': {(_t_filter-_t_scan)*1000:.1f}ms (after filter: {len(installed_models)})")
 
     # Sort models
     import time as _time
@@ -1310,12 +1430,7 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc"):
                     pass
         threading.Thread(target=_bg_fetch_thumbnails, args=(needs_fetch,), daemon=True).start()
 
-    _t_pre_html = _t.perf_counter()
-    html = make_installed_cards_html(installed_models)
-    _t_html = _t.perf_counter()
-    _timing_log(f"make_installed_cards_html: {(_t_html-_t_pre_html)*1000:.1f}ms (cards: {len(installed_models)}, html size: {len(html)} bytes)")
-    _timing_log(f"TOTAL get_installed_models_html: {(_t_html-_t0)*1000:.1f}ms")
-    return html
+    return make_installed_cards_html(installed_models, selected_paths=_selected_installed_paths)
 
 
 def get_folder_tree_html():
@@ -1563,8 +1678,16 @@ def on_ui_tabs():
             # === TAB 3: Installed Models ===
             with gr.Tab("Installed"):
                 with gr.Row():
-                    # Left side: Sort + Folder tree
-                    with gr.Column(scale=1, min_width=200):
+                    # Left side: Sort + Folder tree (collapsible — see hamburger
+                    # toggle below; classes civ-sidebar-hidden / civ-sidebar-overlay
+                    # are flipped from JS at runtime to hide it or float it
+                    # over the cards as an overlay).
+                    # Start collapsed — first ☰ click opens it as an overlay.
+                    with gr.Column(
+                        scale=1, min_width=200,
+                        elem_id="civ_folder_sidebar",
+                        elem_classes=["civ-sidebar-hidden"],
+                    ):
                         installed_sort = gr.Dropdown(
                             choices=["Publish Date (Newest)", "Publish Date (Oldest)",
                                      "Filename (A-Z)", "Filename (Z-A)"],
@@ -1576,18 +1699,51 @@ def on_ui_tabs():
                             }.get(_saved.get("installed_sort", "date_desc"), "Publish Date (Newest)"),
                             label="Sort by", scale=1
                         )
-                        gr.Markdown("### Folders")
-                        folder_tree_html = gr.HTML(value=get_folder_tree_html())
                         installed_refresh_btn = gr.Button("Refresh Folder Tree", variant="secondary")
+                        gr.Markdown("### Folders", elem_id="civ_folders_title")
+                        folder_tree_html = gr.HTML(value=get_folder_tree_html(), elem_id="civ_folder_tree")
 
-                    # Right side: Model cards
+                    # Right side: Model cards + batch-action row
                     with gr.Column(scale=4):
-                        installed_html = gr.HTML(value='<div class="civ-no-results">Select a folder to view models.</div>')
-                
+                        with gr.Row(elem_id="civ_installed_actions"):
+                            # Hamburger toggle for the Folders sidebar.
+                            # Pure-JS behavior; no backend handler bound.
+                            sidebar_toggle_btn = gr.Button(
+                                "☰",
+                                elem_id="civ_sidebar_toggle_btn",
+                                scale=0
+                            )
+                            installed_delete_btn = gr.Button(
+                                "🗑️ Delete Selected",
+                                variant="stop",
+                                elem_id="civ_installed_delete_btn",
+                                scale=1
+                            )
+                            installed_select_all_btn = gr.Button(
+                                "✓ Select All in View",
+                                variant="secondary",
+                                elem_id="civ_installed_select_all_btn",
+                                scale=1
+                            )
+                            # Use gr.HTML rather than gr.Markdown — older Gradio
+                            # versions can fail to register an event endpoint
+                            # when Markdown is in outputs[], producing the
+                            # "unnamed_endpoints" JS error and silently breaking
+                            # adjacent bindings (e.g. the folder filter click).
+                            installed_delete_status = gr.HTML(
+                                value="", elem_id="civ_installed_delete_status"
+                            )
+                        installed_html = gr.HTML(
+                            value='<div class="civ-no-results">Select a folder to view models.</div>',
+                            elem_id="civ_installed_html"
+                        )
+
                 # Hidden states for installed model selection
                 installed_model_id_state = gr.Textbox(visible=False, elem_id="civ_installed_model_id")
                 installed_model_name_state = gr.Textbox(visible=False, elem_id="civ_installed_model_name")
                 installed_filter_folder = gr.Textbox(visible=False, elem_id="civ_installed_filter_folder")
+                # Hidden bridge: JS writes "<path>_<random>" here on checkbox click
+                installed_select_toggle = gr.Textbox(visible=False, elem_id="civ_installed_select_toggle")
 
             # === TAB 4: Downloads ===
             with gr.Tab("Downloads"):
@@ -1710,6 +1866,33 @@ def on_ui_tabs():
             fn=_refresh_folder_tree,
             inputs=[],
             outputs=[folder_tree_html]
+        )
+
+        # Installed - Checkbox toggle (JS writes "<path>_<random>" to the bridge textbox)
+        installed_select_toggle.change(
+            fn=do_toggle_installed_selection,
+            inputs=[installed_select_toggle, installed_filter_folder, installed_sort],
+            outputs=[installed_html],
+            queue=False,
+            show_progress=False
+        )
+
+        # Installed - Batch delete selected models (+ refresh cards + status line)
+        installed_delete_btn.click(
+            fn=do_delete_selected_installed,
+            inputs=[installed_filter_folder, installed_sort],
+            outputs=[installed_html, installed_delete_status],
+            queue=False,
+            show_progress=False
+        )
+
+        # Installed - Select all visible (or toggle off if already all selected)
+        installed_select_all_btn.click(
+            fn=do_select_all_installed,
+            inputs=[installed_filter_folder, installed_sort],
+            outputs=[installed_html],
+            queue=False,
+            show_progress=False
         )
 
         # Downloads
