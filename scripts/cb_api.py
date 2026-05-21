@@ -2,6 +2,7 @@
 
 import requests
 import json
+import sys
 import time
 import os
 import re
@@ -449,9 +450,39 @@ def scan_installed_models():
     return filenames, sha256s, model_ids
 
 
-def scan_installed_civitai_models():
+# Cache for scan_installed_civitai_models() — walking thousands of model files and
+# reading every .json sidecar is slow. Invalidate via invalidate_installed_scan_cache()
+# whenever files are added/removed (download complete, delete, explicit refresh).
+_installed_civitai_cache = None
+
+
+def invalidate_installed_scan_cache():
+    """Drop cached installed-model scan. Call after add/remove operations."""
+    global _installed_civitai_cache
+    _installed_civitai_cache = None
+
+
+def _timing_log_api(msg):
+    try:
+        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'timing.log')
+        from datetime import datetime
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {msg}\n")
+    except Exception:
+        pass
+
+
+def scan_installed_civitai_models(force=False):
     """Scan models and embeddings directories for installed models.
-    Returns list of dicts with model info including civitai_model_id if available."""
+    Returns list of dicts with model info including civitai_model_id if available.
+
+    Result is cached in-process; pass force=True to bypass the cache."""
+    global _installed_civitai_cache
+    if not force and _installed_civitai_cache is not None:
+        _timing_log_api(f"scan_installed_civitai_models: CACHE HIT ({len(_installed_civitai_cache[0])} models)")
+        return _installed_civitai_cache
+    _timing_log_api(f"scan_installed_civitai_models: CACHE MISS, walking disk... (force={force})")
+
     installed_models = []
     seen_paths = set()
     model_extensions = ('.safetensors', '.ckpt', '.pt', '.bin', '.pth')
@@ -537,7 +568,9 @@ def scan_installed_civitai_models():
         except Exception:
             pass
 
-    return installed_models, []
+    result = (installed_models, [])
+    _installed_civitai_cache = result
+    return result
 
 
 def make_installed_cards_html(installed_models):

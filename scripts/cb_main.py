@@ -758,6 +758,8 @@ def do_refresh_fav():
 
 
 def do_refresh_installed():
+    from cb_api import invalidate_installed_scan_cache
+    invalidate_installed_scan_cache()
     return gr.update(value=get_installed_models_html())
 
 
@@ -887,6 +889,7 @@ def get_model_info_html(model_id_str):
                 _lora_filename = os.path.splitext(os.path.basename(_m["path"]))[0]
     except Exception:
         pass
+    lora_name_escaped = _lora_filename.replace('"', '&quot;')
     
     # Build CivitAI URL
     civitai_url = f"https://civitai.red/models/{model_id}"
@@ -1082,7 +1085,6 @@ def get_model_info_html(model_id_str):
                     geninfo_str = chr(10).join(geninfo_lines)
                     geninfo_escaped = geninfo_str.replace(chr(34), "&quot;").replace(chr(10), "&#10;") if geninfo_str else ''
 
-                    lora_name_escaped = _lora_filename.replace('"', '&quot;')
                     prompt_display = html_mod.escape(prompt_text).replace('\n', '<br>') if prompt_text else '<span class="civ-no-prompt">No prompt data</span>'
                     neg_display = html_mod.escape(neg_prompt_text).replace('\n', '<br>') if neg_prompt_text else '<span class="civ-no-prompt">No negative prompt data</span>'
                     parts.append(f'''<div class="civ-sample-item-list" data-img-url="{url}">
@@ -1091,7 +1093,7 @@ def get_model_info_html(model_id_str):
                         </div>
                         <div class="civ-sample-prompts">
                             <div class="civ-prompt-block">
-                                <div class="civ-prompt-label">Prompt <button class="civ-copy-btn" data-copy-type="prompt" data-copy="{prompt_escaped}">📋 Copy</button></div>
+                                <div class="civ-prompt-label">Prompt <button class="civ-copy-btn" data-copy-type="prompt" data-copy="{prompt_escaped}" data-lora-name="{lora_name_escaped}">📋 Copy</button></div>
                                 <div class="civ-prompt-text">{prompt_display}</div>
                             </div>
                             <div class="civ-prompt-block">
@@ -1131,7 +1133,7 @@ def get_model_info_html(model_id_str):
             parts.append(f'''<div class="civ-trigger-block">
                 <div class="civ-trigger-block-header">
                     <span class="civ-trigger-label">{label}</span>
-                    <button class="civ-copy-btn" data-copy="{copy_escaped}">📋 Copy All</button>
+                    <button class="civ-copy-btn" data-copy="{copy_escaped}" data-lora-name="{lora_name_escaped}">📋 Copy All</button>
                 </div>
                 <div class="civ-trigger-chips">{words_html}</div>
             </div>''')
@@ -1192,13 +1194,31 @@ def fetch_and_send_image_metadata(image_url):
 
 # --- Installed Models Tab ---
 
-def get_installed_models_html(filter_folder="", sort_by="date_desc"):
-    """Scan and display installed models as cards with preview."""
-    _refresh_installed()
+def _timing_log(msg):
+    """Append a timing log line to extensions/sd-civitai-browser-new/timing.log."""
+    try:
+        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'timing.log')
+        from datetime import datetime
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {msg}\n")
+    except Exception:
+        pass
 
+
+def get_installed_models_html(filter_folder="", sort_by="date_desc"):
+    """Scan and display installed models as cards with preview.
+
+    Uses the cached scan from scan_installed_civitai_models(); cache is invalidated
+    on download-complete, delete, or explicit refresh, so folder/sort clicks are
+    instant after the first scan."""
+    import time as _t
+    _t0 = _t.perf_counter()
+    _timing_log(f"--- get_installed_models_html(filter_folder={filter_folder!r}, sort_by={sort_by!r}) ---")
     from cb_api import scan_installed_civitai_models, make_installed_cards_html
 
     installed_models, folders = scan_installed_civitai_models()
+    _t_scan = _t.perf_counter()
+    _timing_log(f"scan_installed_civitai_models: {(_t_scan-_t0)*1000:.1f}ms (total before filter: {len(installed_models)})")
 
     # Filter by folder
     if filter_folder:
@@ -1207,6 +1227,8 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc"):
             m for m in installed_models
             if m.get('folder', '').replace('\\', '/').startswith(filter_folder_normalized)
         ]
+    _t_filter = _t.perf_counter()
+    _timing_log(f"filter '{filter_folder}': {(_t_filter-_t_scan)*1000:.1f}ms (after filter: {len(installed_models)})")
 
     # Sort models
     import time as _time
@@ -1288,7 +1310,12 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc"):
                     pass
         threading.Thread(target=_bg_fetch_thumbnails, args=(needs_fetch,), daemon=True).start()
 
-    return make_installed_cards_html(installed_models)
+    _t_pre_html = _t.perf_counter()
+    html = make_installed_cards_html(installed_models)
+    _t_html = _t.perf_counter()
+    _timing_log(f"make_installed_cards_html: {(_t_html-_t_pre_html)*1000:.1f}ms (cards: {len(installed_models)}, html size: {len(html)} bytes)")
+    _timing_log(f"TOTAL get_installed_models_html: {(_t_html-_t0)*1000:.1f}ms")
+    return html
 
 
 def get_folder_tree_html():
@@ -1645,16 +1672,22 @@ def on_ui_tabs():
             _save_installed_sort(sort_key)
             return get_installed_models_html(folder, sort_key)
 
-        # Installed - Folder click or sort change triggers scan + filter
+        # Installed - Folder click or sort change triggers scan + filter.
+        # queue=False so Gradio doesn't enqueue these behind unrelated events —
+        # the handler is fast once the installed-scan cache is warm.
         installed_filter_folder.change(
             fn=_installed_with_sort,
             inputs=[installed_filter_folder, installed_sort],
-            outputs=[installed_html]
+            outputs=[installed_html],
+            queue=False,
+            show_progress=False
         )
         installed_sort.change(
             fn=_installed_with_sort,
             inputs=[installed_filter_folder, installed_sort],
-            outputs=[installed_html]
+            outputs=[installed_html],
+            queue=False,
+            show_progress=False
         )
 
         # Installed model selection → popup
@@ -1666,9 +1699,15 @@ def on_ui_tabs():
             show_progress=False
         )
 
-        # Refresh folder tree only
+        # Refresh folder tree — also invalidate the installed-scan cache so the
+        # next folder/sort click picks up newly added/removed files from disk.
+        def _refresh_folder_tree():
+            from cb_api import invalidate_installed_scan_cache
+            invalidate_installed_scan_cache()
+            return get_folder_tree_html()
+
         installed_refresh_btn.click(
-            fn=get_folder_tree_html,
+            fn=_refresh_folder_tree,
             inputs=[],
             outputs=[folder_tree_html]
         )
