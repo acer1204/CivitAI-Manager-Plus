@@ -4,3 +4,6 @@ model_info_cache/
 search_config.json
 .claude/
 .qwen/
+.idea/
+timing.log
+audit_report.txt
