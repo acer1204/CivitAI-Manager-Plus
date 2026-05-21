@@ -382,6 +382,21 @@ function _copyTextToClipboard(text) {
     });
 }
 
+function _appendLoraTag(text, loraName) {
+    // Mirror Send's behavior: append <lora:filename:1> at the END of the text.
+    // Placing it at the end avoids shifting CLIP token positions for surrounding words.
+    if (!loraName) return text;
+    const loraTag = `<lora:${loraName}:1>`;
+    if (!text.toLowerCase().includes(loraName.toLowerCase())) {
+        return text.trimEnd().replace(/,\s*$/, '') + (text.trim() ? ', ' : '') + loraTag;
+    }
+    // Tag already exists somewhere — move it to the end to avoid token-position drift.
+    const escaped = loraName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const loraPattern = new RegExp(',?\\s*<lora:' + escaped + ':[\\d.]+>\\s*,?', 'i');
+    const cleaned = text.replace(loraPattern, ', ').replace(/,\s*,/g, ',').trimEnd().replace(/,\s*$/, '');
+    return cleaned + (cleaned.trim() ? ', ' : '') + loraTag;
+}
+
 function bindCopyButtons() {
     document.querySelectorAll('.civ-copy-btn').forEach(btn => {
         btn.addEventListener('click', function(e) {
@@ -392,7 +407,15 @@ function bindCopyButtons() {
             if (!copyText) return;
 
             // Decode HTML entities (browser may have already decoded, but handle both cases)
-            const decodedText = copyText.replace(/&#10;/g, '\n').replace(/&quot;/g, '"');
+            let decodedText = copyText.replace(/&#10;/g, '\n').replace(/&quot;/g, '"');
+
+            // Append <lora:filename:1> at end (matches Send button). Only when the
+            // button opted in via data-lora-name — negative-prompt buttons omit it.
+            const loraName = (this.dataset.loraName || '').trim();
+            if (loraName) {
+                decodedText = _appendLoraTag(decodedText, loraName);
+            }
+
             const targetBtn = this;
 
             try {

@@ -448,6 +448,13 @@ class DownloadManager:
             if item in self._queue:
                 self._queue.remove(item)
             self._completed.append(item)
+        # New file on disk — drop the installed-scan cache so the Installed tab
+        # picks it up on the next folder/sort click.
+        try:
+            from cb_api import invalidate_installed_scan_cache
+            invalidate_installed_scan_cache()
+        except Exception:
+            pass
 
     def _move_to_failed(self, item):
         with self._lock:
@@ -518,6 +525,12 @@ def delete_model(file_path):
                 os.remove(f)
         except Exception:
             pass
+
+    try:
+        from cb_api import invalidate_installed_scan_cache
+        invalidate_installed_scan_cache()
+    except Exception:
+        pass
 
     return True
 
