@@ -69,7 +69,8 @@ class CivitAIClient:
                 raise
 
     def search_models(self, query="", search_type="Model name", content_type=None,
-                      base_model=None, sort="Highest Rated", period="AllTime",
+                      base_model=None, category=None, user_filter=None,
+                      sort="Highest Rated", period="AllTime",
                       page=1, limit=20, nsfw=False, cursor=None):
         """Search for models on CivitAI. Returns dict with 'items' and 'metadata'."""
         params = {"limit": limit, "sort": sort, "nsfw": str(nsfw).lower()}
@@ -89,17 +90,57 @@ class CivitAIClient:
             else:
                 params["baseModels"] = base_model
 
+        # User filter — independent of the search box (matches the website's
+        # separate "user" chip in /search/models). Goes to `username` API param.
+        if user_filter:
+            uf = str(user_filter).strip()
+            if uf:
+                params["username"] = uf
+                # If the user typed the same string in the search box too, drop
+                # the `query=` param — the public API's `query` only matches
+                # model name/description (not username, unlike the website's
+                # Meilisearch). Sending both would AND them and produce almost
+                # zero results when the username happens to also appear in a
+                # model's name. Treat the duplicate as "user filter only".
+                if query and str(query).strip().lower() == uf.lower():
+                    query = ""
+
+        # Build the `tag` parameter from:
+        #   - Category multi-select (each picked chip → one tag)
+        #   - Search-by-Tag query (one more tag, ANDed with categories)
+        # Requests serializes a list as repeated `?tag=a&tag=b` query params,
+        # matching civitai.red's frontend search URL shape.
+        tags = []
+        if category:
+            if isinstance(category, list):
+                tags.extend(str(c).strip().lower() for c in category if c)
+            else:
+                c = str(category).strip().lower()
+                if c:
+                    tags.append(c)
+
         if query:
             if "civitai.com" in query or "civitai.red" in query:
                 match = re.search(r'models/(\d+)', query)
                 if match:
                     params["ids"] = match.group(1)
             elif search_type == "User name":
-                params["username"] = query
+                # Don't overwrite explicit user filter from the dedicated field
+                if "username" not in params:
+                    params["username"] = query
             elif search_type == "Tag":
-                params["tag"] = query
+                # Append Tag-search query to the categories list so all tags
+                # are sent as repeated `?tag=` params (AND filtering).
+                tags.append(str(query).strip().lower())
             else:
                 params["query"] = query
+
+        if tags:
+            # Deduplicate while preserving order
+            seen = set()
+            uniq = [t for t in tags if t and not (t in seen or seen.add(t))]
+            if uniq:
+                params["tag"] = uniq if len(uniq) > 1 else uniq[0]
 
         if cursor:
             params["cursor"] = cursor
@@ -356,15 +397,30 @@ def make_model_cards_html(items, installed_hashes=None, installed_files=None, se
         installed_class = "civ-installed" if is_installed else ""
 
         # ── Thumbnail ──
+        # Pick the first usable image: some versions have an images[] entry
+        # with an empty/missing url, or the url 404s on CivitAI's CDN. Try
+        # entries in order, then fall back to "No Preview" both at render
+        # time (empty list / no url) and at load time (onerror swap below).
+        media_tag = ''
         if images:
-            img = images[0]
-            img_url = img.get("url", "")
-            if img.get("type") == "video":
-                img_url = img_url.replace("width=", "transcode=true,width=")
-                media_tag = f'<video class="civ-card-media" autoplay loop muted playsinline><source src="{img_url}" type="video/mp4"></video>'
-            else:
-                media_tag = f'<img class="civ-card-media" loading="lazy" src="{img_url}">'
-        else:
+            for _img_candidate in images:
+                _candidate_url = (_img_candidate.get("url") or "").strip()
+                if not _candidate_url:
+                    continue
+                if _img_candidate.get("type") == "video":
+                    _candidate_url = _candidate_url.replace("width=", "transcode=true,width=")
+                    media_tag = (
+                        f'<video class="civ-card-media" autoplay loop muted playsinline '
+                        f'onerror="this.outerHTML=&quot;<div class=\\&quot;civ-card-no-img\\&quot;>No Preview</div>&quot;">'
+                        f'<source src="{_candidate_url}" type="video/mp4"></video>'
+                    )
+                else:
+                    media_tag = (
+                        f'<img class="civ-card-media" loading="lazy" src="{_candidate_url}" '
+                        f'onerror="this.outerHTML=&quot;<div class=\\&quot;civ-card-no-img\\&quot;>No Preview</div>&quot;">'
+                    )
+                break
+        if not media_tag:
             media_tag = '<div class="civ-card-no-img">No Preview</div>'
 
         # ── Name / version subtitle ──

@@ -692,6 +692,63 @@ setInterval(function() {
     }
 }, 2000);
 
+// --- Video Performance: pause off-screen card videos ---
+// Each <video class="civ-card-media" autoplay loop muted> in the grid keeps
+// decoding frames continuously, even when scrolled out of view. With 50–100
+// cards on screen the constant decode work makes scrolling janky and causes
+// visible flicker. IntersectionObserver pauses anything not on-screen.
+//
+// MutationObserver picks up newly inserted videos whenever Gradio re-renders.
+(function setupVideoVisibilityPause() {
+    if (!('IntersectionObserver' in window)) return;
+
+    const visibilityObserver = new IntersectionObserver(function(entries) {
+        for (const entry of entries) {
+            const video = entry.target;
+            if (entry.isIntersecting) {
+                if (video.paused) {
+                    const p = video.play();
+                    if (p && typeof p.catch === 'function') p.catch(() => {});
+                }
+            } else {
+                if (!video.paused) video.pause();
+            }
+        }
+    }, {
+        // Start playing slightly before scroll-into-view, stop slightly after leaving
+        rootMargin: '200px 0px',
+        threshold: 0,
+    });
+
+    const tracked = new WeakSet();
+    function trackNewVideos(root) {
+        const videos = (root || document).querySelectorAll('video.civ-card-media');
+        videos.forEach(v => {
+            if (tracked.has(v)) return;
+            tracked.add(v);
+            visibilityObserver.observe(v);
+        });
+    }
+
+    trackNewVideos(document);
+    const mutationObserver = new MutationObserver(function(mutations) {
+        for (const m of mutations) {
+            for (const node of m.addedNodes) {
+                if (node.nodeType !== 1) continue;
+                if (node.matches && node.matches('video.civ-card-media')) {
+                    if (!tracked.has(node)) {
+                        tracked.add(node);
+                        visibilityObserver.observe(node);
+                    }
+                } else if (node.querySelectorAll) {
+                    trackNewVideos(node);
+                }
+            }
+        }
+    });
+    mutationObserver.observe(document.body, { childList: true, subtree: true });
+})();
+
 // Make functions globally available
 window.showModelInfoPopup = showModelInfoPopup;
 window.hideModelInfoPopup = hideModelInfoPopup;
