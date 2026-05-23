@@ -45,13 +45,15 @@ _model_data_cache = {}  # Temporary cache: model_id -> {"model_data": ..., "vers
 _SEARCH_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "search_config.json")
 
 
-def _save_search_config(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
+def _save_search_config(query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, save_local=False):
     """Save last search configuration to file."""
     config = {
         "query": query or "",
         "search_type": str(search_type) if search_type else "Model name",
         "content_type": content_type if content_type else [],
         "base_model": base_model if base_model else [],
+        "category": category if category else [],
+        "user_filter": (user_filter or "").strip(),
         "sort_type": sort_type or "Highest Rated",
         "period": period or "AllTime",
         "nsfw": True if nsfw else False,
@@ -72,6 +74,8 @@ def _load_search_config():
         "search_type": "Model name",
         "content_type": None,
         "base_model": None,
+        "category": None,
+        "user_filter": "",
         "sort_type": "Highest Rated",
         "period": "AllTime",
         "nsfw": getattr(shared.opts, "civitai_default_nsfw", False),
@@ -91,6 +95,8 @@ def _load_search_config():
                 defaults["content_type"] = None
             if not defaults["base_model"]:
                 defaults["base_model"] = None
+            if not defaults["category"]:
+                defaults["category"] = None
     except Exception as e:
         print(f"[DEBUG] Failed to load search config: {e}", file=sys.stderr)
     return defaults
@@ -293,24 +299,21 @@ def do_select_all_installed(filter_folder, sort_label):
     return gr.update(value=get_installed_models_html(filter_folder, sort_key))
 
 
-def do_toggle_installed_selection(path_with_suffix, filter_folder, sort_label):
-    """Toggle a path in the installed-selection set, then re-render the cards.
+def do_toggle_installed_selection(path_with_suffix):
+    """Toggle a path in the installed-selection set without re-rendering.
 
     The hidden textbox carries 'path_random' so Gradio fires on every click
     even when the user re-clicks the same checkbox; we drop the suffix here.
+
+    JS already toggled the checkbox visual on click. The next render that
+    actually touches HTML (Select All / delete / folder change) reads from
+    _selected_installed_paths so state stays consistent.
     """
     raw = _strip_random_suffix(path_with_suffix)
     if raw and raw in _selected_installed_paths:
         _selected_installed_paths.discard(raw)
     elif raw:
         _selected_installed_paths.add(raw)
-    sort_key = {
-        "Publish Date (Newest)": "date_desc",
-        "Publish Date (Oldest)": "date_asc",
-        "Filename (A-Z)": "name_asc",
-        "Filename (Z-A)": "name_desc",
-    }.get(sort_label, "date_desc")
-    return gr.update(value=get_installed_models_html(filter_folder, sort_key))
 
 
 def do_delete_selected_installed(filter_folder, sort_label):
@@ -406,6 +409,18 @@ SORT_OPTIONS = ["Highest Rated", "Most Downloaded", "Most Liked", "Most Buzz",
 
 PERIOD_OPTIONS = ["AllTime", "Year", "Month", "Week", "Day"]
 
+# CivitAI category chips (the same set shown on civitai.red/civitai.com filter UI).
+# civitai.red's search frontend uses repeated `category=` query params for
+# multi-select; we pass the picked list as repeated `tag=` params, which the
+# CivitAI /models endpoint accepts as multi-value filtering.
+CATEGORIES = [
+    "Action", "Animal", "Assets", "Background", "Base Model",
+    "Buildings", "Celebrity", "Character", "Clothing", "Concept",
+    "Objects", "Poses", "Style", "Tool", "Vehicle",
+]
+
+NSFW_OPTIONS = ["No", "Yes"]
+
 
 def _refresh_installed():
     """Refresh installed models cache."""
@@ -415,7 +430,7 @@ def _refresh_installed():
 
 # --- Search & Browse ---
 
-def _do_search_internal(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, page):
+def _do_search_internal(query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, page):
     """Internal search that stores results."""
     global _current_page, _total_pages, _last_search_items, _page_cursors, _last_base_model_filter
 
@@ -424,12 +439,17 @@ def _do_search_internal(query, search_type, content_type, base_model, sort_type,
     # Use cursor for page > 1 if available (CivitAI uses cursor-based pagination)
     cursor = _page_cursors.get(page - 1) if page > 1 else None
 
+    # NSFW now comes in as either bool (legacy) or "Yes"/"No" (new dropdown)
+    nsfw_bool = (nsfw == "Yes") if isinstance(nsfw, str) else bool(nsfw)
+
     result = api.search_models(
         query=query, search_type=search_type,
         content_type=content_type if content_type else None,
         base_model=base_model if base_model else None,
+        category=category if category else None,
+        user_filter=(user_filter or "").strip() or None,
         sort=sort_type, period=period,
-        page=page, limit=int(cards_per_page), nsfw=nsfw,
+        page=page, limit=int(cards_per_page), nsfw=nsfw_bool,
         cursor=cursor
     )
 
@@ -463,21 +483,21 @@ def _do_search_internal(query, search_type, content_type, base_model, sort_type,
     return html, page_display
 
 
-def do_search(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
+def do_search(query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, save_local=False):
     global _page_cursors
     _page_cursors = {}  # Reset cursors for new search
     _refresh_installed()
-    _save_search_config(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local)
-    return _do_search_internal(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, 1)
+    _save_search_config(query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, save_local)
+    return _do_search_internal(query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, 1)
 
 
-def do_page(direction, query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
+def do_page(direction, query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, save_local=False):
     page = _current_page
     if direction == "next" and page < _total_pages:
         page += 1
     elif direction == "prev" and page > 1:
         page -= 1
-    return _do_search_internal(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, page)
+    return _do_search_internal(query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, page)
 
 
 # --- Model Details ---
@@ -883,12 +903,12 @@ def do_toggle_favorite(model_id_str, model_name, thumbnail):
     return gr.update(value=get_favorites_html()), status
 
 
-def do_prev_page(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
-    return do_page("prev", query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local)
+def do_prev_page(query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, save_local=False):
+    return do_page("prev", query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, save_local)
 
 
-def do_next_page(query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local=False):
-    return do_page("next", query, search_type, content_type, base_model, sort_type, period, nsfw, cards_per_page, save_local)
+def do_next_page(query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, save_local=False):
+    return do_page("next", query, search_type, content_type, base_model, category, user_filter, sort_type, period, nsfw, cards_per_page, save_local)
 
 
 def do_refresh_fav():
@@ -922,21 +942,23 @@ def do_show_fav_btn(model_id_str):
 def do_toggle_card_selection(selection_key_str):
     """Toggle selection state for a single model card.
     selection_key_str is either 'model_id' (legacy) or 'model_id:version_id' (version item).
+
+    Returns nothing — the JS already flipped the checkbox's visual state on
+    click. Re-rendering the whole grid here would cause every image and video
+    to reload, the scroll position to reset, and a visible flash. The next
+    render that DOES update HTML (Select All / page change / search) reads
+    from _selected_model_ids so state stays consistent.
     """
     global _selected_model_ids
 
     if not selection_key_str:
-        return gr.update(value=get_favorites_html())
+        return
 
     selection_key_str = str(selection_key_str)
     if selection_key_str in _selected_model_ids:
         _selected_model_ids.discard(selection_key_str)
     else:
         _selected_model_ids.add(selection_key_str)
-
-    # Re-render cards with updated selection
-    html = make_model_cards_html(_last_search_items, _installed_hashes, _installed_files, _selected_model_ids, _installed_model_ids)
-    return gr.update(value=html)
 
 
 def get_model_info_html(model_id_str):
@@ -1635,6 +1657,17 @@ def on_ui_tabs():
                             multiselect=True, value=_saved["base_model"], scale=2
                         )
                     with gr.Row():
+                        category_filter = gr.Dropdown(
+                            choices=CATEGORIES, label="Category",
+                            multiselect=True, value=_saved["category"], scale=2
+                        )
+                        user_filter = gr.Textbox(
+                            label="Filter by user",
+                            placeholder="Creator username (independent of search box)",
+                            value=_saved.get("user_filter", ""),
+                            max_lines=1, scale=2
+                        )
+                    with gr.Row():
                         sort_type = gr.Dropdown(
                             choices=SORT_OPTIONS, value=_saved["sort_type"],
                             label="Sort by", scale=1
@@ -1643,10 +1676,10 @@ def on_ui_tabs():
                             choices=PERIOD_OPTIONS, value=_saved["period"],
                             label="Period", scale=1
                         )
-                        show_nsfw = gr.Checkbox(
-                            label="Show NSFW",
-                            value=_saved["nsfw"],
-                            scale=1
+                        show_nsfw = gr.Dropdown(
+                            choices=NSFW_OPTIONS,
+                            value=("Yes" if _saved["nsfw"] else "No"),
+                            label="Show NSFW", scale=1
                         )
                         cards_per_page = gr.Slider(
                             minimum=5, maximum=100, value=_saved["cards_per_page"], step=5,
@@ -1755,8 +1788,12 @@ def on_ui_tabs():
                 dl_auto_refresh_trigger = gr.Textbox(visible=False, elem_id="civ_dl_auto_refresh")
 
         # --- Event Bindings ---
+        # Order MUST match do_search/do_page positional args:
+        # (query, search_type, content_type, base_model, category, user_filter,
+        #  sort_type, period, nsfw, cards_per_page, save_local)
         search_inputs = [search_input, search_type, content_type, base_model_filter,
-                         sort_type, period_type, show_nsfw, cards_per_page, save_local_on_download]
+                         category_filter, user_filter, sort_type, period_type,
+                         show_nsfw, cards_per_page, save_local_on_download]
         search_outputs = [model_cards, page_info]
 
         search_btn.click(fn=do_search, inputs=search_inputs, outputs=search_outputs)
@@ -1786,11 +1823,17 @@ def on_ui_tabs():
             outputs=[dl_html, select_status]
         )
 
-        # Card checkbox toggle - update selection state and re-render cards
+        # Card checkbox toggle — server-side selection state only, no UI re-render.
+        # outputs=[] keeps Gradio from flashing a "loading" overlay on the cards
+        # container on every click. JS already toggled the checkbox visual; the
+        # next render that DOES touch HTML (Select All / page change / search)
+        # reads from _selected_model_ids.
         card_checkbox_trigger.change(
             fn=do_toggle_card_selection,
             inputs=[card_checkbox_trigger],
-            outputs=[model_cards]
+            outputs=[],
+            queue=False,
+            show_progress="hidden"
         )
 
         # Image URL input - fetch metadata and send to txt2img
@@ -1869,12 +1912,15 @@ def on_ui_tabs():
         )
 
         # Installed - Checkbox toggle (JS writes "<path>_<random>" to the bridge textbox)
+        # Installed checkbox toggle — same pattern as Browse's checkbox: pure
+        # server-side state update, no UI re-render, so no Gradio "loading"
+        # flash on the cards container.
         installed_select_toggle.change(
             fn=do_toggle_installed_selection,
-            inputs=[installed_select_toggle, installed_filter_folder, installed_sort],
-            outputs=[installed_html],
+            inputs=[installed_select_toggle],
+            outputs=[],
             queue=False,
-            show_progress=False
+            show_progress="hidden"
         )
 
         # Installed - Batch delete selected models (+ refresh cards + status line)
@@ -1911,11 +1957,16 @@ def on_ui_tabs():
                 gr.update(value=_saved["search_type"]),
                 gr.update(value=_saved["sort_type"]),
                 gr.update(value=_saved["period"]),
-                gr.update(value=_saved["nsfw"]),
+                gr.update(value=("Yes" if _saved["nsfw"] else "No")),
                 gr.update(value=_saved["save_local"]),
                 gr.update(value=_saved["cards_per_page"]),
                 gr.update(value=_sort_key_to_label.get(_saved.get("installed_sort", "date_desc"), "Publish Date (Newest)")),
             )
+        # Note: category_filter, content_type, base_model_filter are NOT in this
+        # load handler. Including a multiselect Dropdown in .load() outputs makes
+        # some Gradio versions treat it as a "controlled" component, breaking
+        # user selection. Their initial value comes from the gr.Dropdown(value=...)
+        # set at declaration time, which is sufficient.
         civitai_browser.load(
             fn=_apply_saved_config,
             outputs=[search_type, sort_type, period_type, show_nsfw, save_local_on_download, cards_per_page, installed_sort]
