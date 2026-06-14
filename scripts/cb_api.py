@@ -73,6 +73,30 @@ class CivitAIClient:
                       sort="Highest Rated", period="AllTime",
                       page=1, limit=20, nsfw=False, cursor=None):
         """Search for models on CivitAI. Returns dict with 'items' and 'metadata'."""
+        # Pasting a CivitAI model URL — fetch the model directly. The /models
+        # list endpoint filters out models flagged `minor=True` even when an
+        # explicit `?ids=X` is given (CivitAI content-policy), so a URL paste
+        # would silently return zero results for those. The per-model endpoint
+        # /api/v1/models/{id} bypasses that filter.
+        if query and ("civitai.com" in query or "civitai.red" in query):
+            m = re.search(r'models/(\d+)', query)
+            if m:
+                mid_str = m.group(1)
+                try:
+                    single = self.get_model(int(mid_str))
+                except Exception:
+                    single = None
+                if single:
+                    return {
+                        "items": [single],
+                        "metadata": {"totalItems": 1, "currentPage": 1, "totalPages": 1},
+                    }
+                return {
+                    "items": [],
+                    "metadata": {"totalItems": 0, "currentPage": page, "totalPages": 0},
+                    "error": f"Model {mid_str} not found",
+                }
+
         params = {"limit": limit, "sort": sort, "nsfw": str(nsfw).lower()}
 
         if period and period != "AllTime":
