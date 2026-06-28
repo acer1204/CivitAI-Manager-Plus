@@ -41,6 +41,33 @@ _EXT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MODEL_INFO_DIR = os.path.join(_EXT_DIR, "model_info_cache")
 _model_data_cache = {}  # Temporary cache: model_id -> {"model_data": ..., "version_images": ...}
 
+# Sentinel used in saved info.json to represent _MODEL_INFO_DIR. Persisted
+# paths are written with this token instead of the live absolute path so the
+# cache survives drive-letter changes or moving the WebUI install.
+_CACHE_TOKEN = "__CIV_CACHE__"
+
+
+def _to_cache_token(abs_path):
+    """Replace _MODEL_INFO_DIR prefix in an absolute path with _CACHE_TOKEN."""
+    if not isinstance(abs_path, str) or not abs_path:
+        return abs_path
+    try:
+        rel = os.path.relpath(abs_path, _MODEL_INFO_DIR)
+    except ValueError:
+        return abs_path  # different drive — leave as-is
+    if rel.startswith('..'):
+        return abs_path
+    return _CACHE_TOKEN + '/' + rel.replace(os.sep, '/')
+
+
+def _expand_cache_token(s):
+    """Substitute the cache token back to the current absolute cache dir.
+    Forward slashes throughout — both Windows file APIs and Gradio's /file=
+    endpoint accept them, and they avoid awkward mixed-separator output."""
+    if not isinstance(s, str) or _CACHE_TOKEN not in s:
+        return s
+    return s.replace(_CACHE_TOKEN, _MODEL_INFO_DIR.replace(os.sep, '/'))
+
 # Search config persistence
 _SEARCH_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "search_config.json")
 
@@ -128,7 +155,7 @@ def _localize_description_images(desc_html, images_dir):
         filename = f"desc_{i}.jpeg"
         local_path = os.path.join(images_dir, filename)
         if _download_image(url, local_path):
-            desc_html = desc_html.replace(url, f"/file={local_path}")
+            desc_html = desc_html.replace(url, f"/file={_to_cache_token(local_path)}")
 
     return desc_html
 
@@ -175,7 +202,7 @@ def _save_model_info_local(model_id):
                 filename = f"{vid_str}_{img_id}.jpeg"
                 local_path = os.path.join(images_dir, filename)
                 if _download_image(url, local_path):
-                    saved_img["local_path"] = local_path
+                    saved_img["local_path"] = _to_cache_token(local_path)
                     downloaded += 1
 
             saved_imgs.append(saved_img)
@@ -217,7 +244,21 @@ def _load_model_info_local(model_id):
         model_data = data.get("model_data")
         if not model_data:
             return None
-        return model_data, data.get("version_images", {})
+        # Expand __CIV_CACHE__ tokens stored at save time back to absolute paths.
+        # Old caches without tokens (raw absolute paths) pass through unchanged.
+        desc = model_data.get("description")
+        if isinstance(desc, str):
+            model_data["description"] = _expand_cache_token(desc)
+        version_images = data.get("version_images", {}) or {}
+        for vid, imgs in version_images.items():
+            if not isinstance(imgs, list):
+                continue
+            for img in imgs:
+                if isinstance(img, dict):
+                    lp = img.get("local_path")
+                    if isinstance(lp, str):
+                        img["local_path"] = _expand_cache_token(lp)
+        return model_data, version_images
     except Exception:
         return None
 
