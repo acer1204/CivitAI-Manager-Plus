@@ -1561,27 +1561,42 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc", tag_filter_
     return make_installed_cards_html(installed_models, selected_paths=_selected_installed_paths)
 
 
-def get_installed_tag_panel_html(tag_filter_json="[]"):
+def get_installed_tag_panel_html(tag_filter_json="[]", filter_folder=""):
     """Render the Tag filter panel body: search input + scrollable list of
-    (tag, count) checkboxes with selected ones marked. Counts are GLOBAL —
-    they reflect every installed model, unaffected by folder/other tag picks.
+    (tag, count) checkboxes with selected ones marked. Counts are FACETED —
+    each number reflects how many models remain in the current folder + tag
+    filter, so the list shrinks as the user narrows the query (matching
+    standard faceted-search behaviour).
 
-    The panel is toggled by JS; server just re-renders on tag change and on
-    installed-cache invalidation (download/delete/refresh)."""
-    from cb_api import scan_installed_civitai_models, count_installed_tags
+    The panel is toggled by JS; server re-renders on tag change, folder
+    change, and installed-cache invalidation (download/delete/refresh)."""
+    from cb_api import scan_installed_civitai_models, count_installed_tags, filter_installed_by_tags
 
     installed_models, _ = scan_installed_civitai_models()
-    tag_counts = count_installed_tags(installed_models)
-    selected = set(_parse_tag_filter(tag_filter_json))
+    selected = _parse_tag_filter(tag_filter_json)
+    selected_set = set(selected)
+
+    # Faceted subset = whatever the cards grid is currently showing:
+    # apply folder first, then the AND tag filter. Counting tags on that
+    # subset gives context-aware numbers. A selected tag will show
+    # count == subset size (every model has it); others show how many
+    # would remain if added.
+    subset = installed_models
+    if filter_folder:
+        normalized = filter_folder.replace('\\', '/')
+        subset = [m for m in subset
+                  if m.get('folder', '').replace('\\', '/').startswith(normalized)]
+    subset = filter_installed_by_tags(subset, selected)
+    tag_counts = count_installed_tags(subset)
 
     total_tags = len(tag_counts)
-    selected_count = len(selected)
+    selected_count = len(selected_set)
 
     parts = []
     parts.append('<div class="civ-tag-panel-inner">')
     parts.append(
         '<div class="civ-tag-panel-header">'
-        f'<span class="civ-tag-panel-title">Tags ({selected_count}/{total_tags})</span>'
+        f'<span class="civ-tag-panel-title">Tags ({selected_count} selected · {total_tags} available)</span>'
         '<button class="civ-tag-panel-clear" type="button">Clear</button>'
         '</div>'
     )
@@ -1590,12 +1605,12 @@ def get_installed_tag_panel_html(tag_filter_json="[]"):
         'autocomplete="off" spellcheck="false">'
     )
     if not tag_counts:
-        parts.append('<div class="civ-tag-empty">No tags found. Save Local on a few models '
-                     'to populate the tag inventory.</div>')
+        parts.append('<div class="civ-tag-empty">No tags found in current filter. '
+                     'Try clearing selections or another folder.</div>')
     else:
         parts.append('<div class="civ-tag-list">')
         for tag, count in tag_counts:
-            is_sel = tag in selected
+            is_sel = tag in selected_set
             cls = "civ-tag-item civ-tag-selected" if is_sel else "civ-tag-item"
             tag_esc = tag.replace('"', '&quot;').replace("'", "&#39;")
             tag_disp = html_mod.escape(tag)
@@ -2052,22 +2067,33 @@ def on_ui_tabs():
             _save_installed_sort(sort_key)
             return get_installed_models_html(folder, sort_key, tag_filter_json)
 
+        def _on_folder_change(folder, sort_label, tag_filter_json):
+            """Folder click → cards refilter AND tag counts recompute for the
+            new folder context. Sort is persisted only for legibility (matches
+            what the sort dropdown shows next time)."""
+            sort_key = _sort_label_to_key.get(sort_label, "date_desc")
+            _save_installed_sort(sort_key)
+            cards = get_installed_models_html(folder, sort_key, tag_filter_json)
+            panel = get_installed_tag_panel_html(tag_filter_json, folder)
+            return cards, panel
+
         def _on_tag_filter_change(folder, sort_label, tag_filter_json):
             """Tag selection changed → persist, re-render cards, refresh panel
-            so the checked states match what was chosen."""
+            with faceted counts + updated checkbox states."""
             _save_installed_tag_filter(tag_filter_json)
             sort_key = _sort_label_to_key.get(sort_label, "date_desc")
             cards = get_installed_models_html(folder, sort_key, tag_filter_json)
-            panel = get_installed_tag_panel_html(tag_filter_json)
+            panel = get_installed_tag_panel_html(tag_filter_json, folder)
             return cards, panel
 
-        # Installed - Folder click or sort change triggers scan + filter.
+        # Installed - Folder click re-renders cards AND the tag panel (so
+        # counts are scoped to the new folder). Sort just re-renders cards.
         # queue=False so Gradio doesn't enqueue these behind unrelated events —
         # the handler is fast once the installed-scan cache is warm.
         installed_filter_folder.change(
-            fn=_installed_with_sort,
+            fn=_on_folder_change,
             inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
-            outputs=[installed_html],
+            outputs=[installed_html, installed_tag_panel],
             queue=False,
             show_progress=False
         )
