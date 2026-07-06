@@ -1041,13 +1041,13 @@
 /* The panel is rendered inline inside the cards column but positioned as an
    overlay when JS toggles it open. Anchored top-left under the actions row. */
 #civ_installed_tag_panel {
-    display: none;
+    display: none !important;
 }
 #civ_installed_tag_panel.civ-tag-panel-open {
-    display: block;
-    position: absolute;
-    top: 60px;
-    left: 68px;         /* sit just to the right of the ☰ overlay hotspot */
+    display: block !important;
+    position: fixed;    /* anchor to viewport so we don't fight Gradio wrappers */
+    top: 240px;
+    left: 260px;
     width: 340px;
     max-height: 70vh;
     overflow: hidden;
@@ -1055,8 +1055,23 @@
     border: 1px solid var(--border-color-primary, #374151);
     border-radius: 10px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-    z-index: 200;
+    z-index: 999;
     animation: civTagPanelSlideIn 0.18s ease;
+}
+/* Gradio's gr.HTML wraps our markup in `.wrap` (loading spinner, `.hide` by
+   default), `.svelte-...` sizing div, then a `.prose` block that's set to
+   `display:none` when the outer has `.hide-container`. All three collapse
+   the panel to height:0 even though our `.civ-tag-panel-inner` inside has
+   real content. Force every intermediate wrapper to expand. */
+#civ_installed_tag_panel.civ-tag-panel-open > .wrap {
+    display: none !important;
+}
+#civ_installed_tag_panel.civ-tag-panel-open > *:not(.wrap),
+#civ_installed_tag_panel.civ-tag-panel-open .prose {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
 }
 @keyframes civTagPanelSlideIn {
     from { transform: translateY(-8px); opacity: 0; }
