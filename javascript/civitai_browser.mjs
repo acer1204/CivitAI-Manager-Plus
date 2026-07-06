@@ -749,6 +749,137 @@ setInterval(function() {
     mutationObserver.observe(document.body, { childList: true, subtree: true });
 })();
 
+// --- v1.3: Tag filter panel (Installed tab) ---
+// The panel HTML lives in #civ_installed_tag_panel and is re-rendered by the
+// server whenever the tag selection changes (so checkbox `checked` state
+// stays in sync even after a Gradio round-trip). JS handles: toggle open,
+// close on outside click, live search filter, checkbox → JSON to Gradio,
+// clear-all, and the (N) count next to the toolbar button.
+
+function _readTagFilterState() {
+    const el = document.querySelector('#civ_installed_tag_filter textarea');
+    if (!el || !el.value) return [];
+    try {
+        const parsed = JSON.parse(el.value);
+        return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function _writeTagFilterState(tags) {
+    // Sort so the persisted list is deterministic — makes debugging easier
+    // and avoids spurious Gradio change events from set-order shuffles.
+    const value = JSON.stringify([...new Set(tags.map(String))].sort());
+    updateGradioTextbox('#civ_installed_tag_filter', value);
+}
+
+function _updateTagButtonBadge() {
+    const btn = document.querySelector('#civ_tag_filter_btn');
+    if (!btn) return;
+    const n = _readTagFilterState().length;
+    btn.textContent = n > 0 ? `🏷️ Tags (${n})` : '🏷️ Tags';
+}
+
+function _showTagPanel(show) {
+    const panel = document.getElementById('civ_installed_tag_panel');
+    if (!panel) return;
+    panel.classList.toggle('civ-tag-panel-open', !!show);
+    if (show) {
+        const search = panel.querySelector('.civ-tag-search');
+        if (search) setTimeout(() => search.focus(), 0);
+    }
+}
+
+// Toggle open/close on button click
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('#civ_tag_filter_btn');
+    if (!btn) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const panel = document.getElementById('civ_installed_tag_panel');
+    if (!panel) return;
+    _showTagPanel(!panel.classList.contains('civ-tag-panel-open'));
+});
+
+// Close panel when clicking outside
+document.addEventListener('click', function(e) {
+    const panel = document.getElementById('civ_installed_tag_panel');
+    if (!panel || !panel.classList.contains('civ-tag-panel-open')) return;
+    if (panel.contains(e.target)) return;
+    if (e.target.closest('#civ_tag_filter_btn')) return;
+    _showTagPanel(false);
+});
+
+// Esc closes panel too
+document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Escape') return;
+    const panel = document.getElementById('civ_installed_tag_panel');
+    if (panel && panel.classList.contains('civ-tag-panel-open')) {
+        _showTagPanel(false);
+    }
+});
+
+// Checkbox toggle → JSON to Gradio
+document.addEventListener('change', function(e) {
+    const cb = e.target.closest('#civ_installed_tag_panel .civ-tag-cb');
+    if (!cb) return;
+    const label = cb.closest('.civ-tag-item');
+    if (!label) return;
+    const tag = label.dataset.tag;
+    if (!tag) return;
+
+    const current = new Set(_readTagFilterState());
+    if (cb.checked) current.add(tag);
+    else current.delete(tag);
+    _writeTagFilterState([...current]);
+    _updateTagButtonBadge();
+    // Optimistic visual — the server will re-render the panel authoritatively
+    label.classList.toggle('civ-tag-selected', cb.checked);
+});
+
+// Clear all selections
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('#civ_installed_tag_panel .civ-tag-panel-clear');
+    if (!btn) return;
+    e.stopPropagation();
+    _writeTagFilterState([]);
+    _updateTagButtonBadge();
+    // Uncheck locally for instant feedback; server re-render will follow
+    document.querySelectorAll('#civ_installed_tag_panel .civ-tag-cb').forEach(cb => cb.checked = false);
+    document.querySelectorAll('#civ_installed_tag_panel .civ-tag-item').forEach(el => el.classList.remove('civ-tag-selected'));
+});
+
+// Live search over the tag list — filters purely in the DOM
+document.addEventListener('input', function(e) {
+    const search = e.target.closest('#civ_installed_tag_panel .civ-tag-search');
+    if (!search) return;
+    const q = search.value.trim().toLowerCase();
+    const items = document.querySelectorAll('#civ_installed_tag_panel .civ-tag-item');
+    items.forEach(item => {
+        const name = (item.dataset.tagLc || '');
+        item.style.display = (!q || name.includes(q)) ? '' : 'none';
+    });
+});
+
+// Refresh the (N) badge when either the panel is server-re-rendered (child
+// nodes swap) or the hidden state textbox picks up a new value. Both
+// observers are scoped to their single node so they don't cost anything at
+// idle. Attach once when the elements exist; poll briefly for them because
+// Gradio can insert the tab lazily.
+(function attachTagBadgeObservers() {
+    const panel = document.getElementById('civ_installed_tag_panel');
+    const textbox = document.querySelector('#civ_installed_tag_filter textarea');
+    if (!panel || !textbox) {
+        setTimeout(attachTagBadgeObservers, 500);
+        return;
+    }
+    _updateTagButtonBadge();
+    new MutationObserver(_updateTagButtonBadge).observe(panel, { childList: true });
+    textbox.addEventListener('input', _updateTagButtonBadge);
+    textbox.addEventListener('change', _updateTagButtonBadge);
+})();
+
 // Make functions globally available
 window.showModelInfoPopup = showModelInfoPopup;
 window.hideModelInfoPopup = hideModelInfoPopup;

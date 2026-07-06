@@ -36,6 +36,7 @@ class DownloadItem:
     preview_type: str = "image"  # "image" or "video"
     published_at: str = ""  # CivitAI publish date
     trained_words: list = None  # Trigger words
+    tags: list = None  # Model-level tags — used by Installed tab's tag filter
     status: str = "queued"  # queued | downloading | completed | failed | cancelled
     progress: float = 0.0
     speed: str = ""
@@ -57,7 +58,7 @@ class DownloadManager:
 
     def add(self, url, filename, install_path, model_name, version_name,
             model_id, version_id=0, sha256="", preview_url="", preview_type="image",
-            published_at="", trained_words=None) -> int:
+            published_at="", trained_words=None, tags=None) -> int:
         """Add a download to the queue and ensure background processor is running."""
         with self._lock:
             dl_id = self._next_id
@@ -69,7 +70,7 @@ class DownloadManager:
                 version_id=int(version_id) if version_id else 0,
                 sha256=sha256, preview_url=preview_url,
                 preview_type=preview_type, published_at=published_at,
-                trained_words=trained_words
+                trained_words=trained_words, tags=tags
             )
             self._queue.append(item)
         # Auto-start background processor
@@ -405,6 +406,7 @@ class DownloadManager:
             "download_date": time.strftime("%Y-%m-%d %H:%M:%S"),
             "published_at": item.published_at,
             "trained_words": item.trained_words or [],
+            "tags": item.tags or [],
         }
         try:
             if os.path.exists(json_path):

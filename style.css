@@ -1023,3 +1023,144 @@
     font-style: italic;
     padding: 12px 0;
 }
+
+/* ─────────────── v1.3: Installed tag filter ─────────────── */
+
+/* Match the sizing of the hamburger / delete / select-all buttons in the
+   #civ_installed_actions row so heights line up. */
+#civ_tag_filter_btn,
+#civ_tag_filter_btn button {
+    height: 40px !important;
+    min-height: 40px !important;
+    max-height: 40px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    white-space: nowrap;
+}
+
+/* The panel is rendered inline inside the cards column but positioned as an
+   overlay when JS toggles it open. Anchored top-left under the actions row. */
+#civ_installed_tag_panel {
+    display: none;
+}
+#civ_installed_tag_panel.civ-tag-panel-open {
+    display: block;
+    position: absolute;
+    top: 60px;
+    left: 68px;         /* sit just to the right of the ☰ overlay hotspot */
+    width: 340px;
+    max-height: 70vh;
+    overflow: hidden;
+    background: var(--background-fill-secondary, #1f2937);
+    border: 1px solid var(--border-color-primary, #374151);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    z-index: 200;
+    animation: civTagPanelSlideIn 0.18s ease;
+}
+@keyframes civTagPanelSlideIn {
+    from { transform: translateY(-8px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
+.civ-tag-panel-inner {
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
+    padding: 12px;
+    box-sizing: border-box;
+    gap: 8px;
+}
+
+.civ-tag-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.civ-tag-panel-title {
+    font-weight: 600;
+    color: var(--body-text-color);
+    font-size: 0.9em;
+}
+.civ-tag-panel-clear {
+    padding: 4px 10px;
+    font-size: 0.8em;
+    background: transparent;
+    color: var(--body-text-color-subdued);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.civ-tag-panel-clear:hover {
+    color: var(--body-text-color);
+    border-color: var(--color-accent);
+}
+
+.civ-tag-search {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 0.9em;
+    background: var(--background-fill-primary);
+    color: var(--body-text-color);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 6px;
+    box-sizing: border-box;
+    outline: none;
+}
+.civ-tag-search:focus {
+    border-color: var(--color-accent);
+}
+
+.civ-tag-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-right: 4px;
+}
+
+.civ-tag-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--body-text-color);
+    font-size: 0.88em;
+    transition: background 0.12s;
+}
+.civ-tag-item:hover {
+    background: rgba(var(--color-accent-rgb, 99, 102, 241), 0.10);
+}
+.civ-tag-item.civ-tag-selected {
+    background: rgba(var(--color-accent-rgb, 99, 102, 241), 0.18);
+    color: var(--body-text-color);
+}
+.civ-tag-cb {
+    margin: 0;
+    accent-color: var(--color-accent, #6366f1);
+    cursor: pointer;
+}
+.civ-tag-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.civ-tag-count {
+    flex: 0 0 auto;
+    color: var(--body-text-color-subdued);
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+}
+
+.civ-tag-empty {
+    color: var(--body-text-color-subdued);
+    font-style: italic;
+    padding: 12px 4px;
+    font-size: 0.85em;
+}

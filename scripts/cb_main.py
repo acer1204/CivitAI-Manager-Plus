@@ -174,6 +174,53 @@ def _save_installed_sort(sort_value):
         pass
 
 
+def _parse_tag_filter(value):
+    """Accept a JSON-encoded list string, an already-decoded list, or empty.
+    Returns list[str] (may be empty). Silently drops garbage."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(t) for t in value if t]
+    try:
+        decoded = json.loads(value)
+    except Exception:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    return [str(t) for t in decoded if t]
+
+
+def _save_installed_tag_filter(tag_filter_json):
+    """Persist the current tag-filter selection so it survives WebUI restart
+    AND folder-tree clicks. Stored as a list of tag names."""
+    tags = _parse_tag_filter(tag_filter_json)
+    try:
+        config = {}
+        if os.path.exists(_SEARCH_CONFIG_FILE):
+            with open(_SEARCH_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        config["installed_tag_filter"] = tags
+        with open(_SEARCH_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _load_installed_tag_filter():
+    """Read the persisted tag filter, return JSON-encoded list string (empty
+    list if not present) — that's the storage format for the hidden textbox."""
+    try:
+        if os.path.exists(_SEARCH_CONFIG_FILE):
+            with open(_SEARCH_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            tags = config.get("installed_tag_filter") or []
+            if isinstance(tags, list):
+                return json.dumps([str(t) for t in tags if t], ensure_ascii=False)
+    except Exception:
+        pass
+    return "[]"
+
+
 def _save_model_info_local(model_id):
     """Save model info + download ALL images (preview + description) to local storage."""
     if model_id not in _model_data_cache:
@@ -308,10 +355,11 @@ def _strip_random_suffix(value):
     return s.rsplit('_', 1)[0] if '_' in s else s
 
 
-def do_select_all_installed(filter_folder, sort_label):
-    """Select every installed card currently visible (i.e. matching filter_folder).
-    With an empty filter, selects ALL installed models — handy for mass cleanup."""
-    from cb_api import scan_installed_civitai_models
+def do_select_all_installed(filter_folder, sort_label, tag_filter_json="[]"):
+    """Select every installed card currently visible — respects both the
+    active folder AND the active tag filter, so users can mass-select what
+    they can see, not the whole install."""
+    from cb_api import scan_installed_civitai_models, filter_installed_by_tags
     installed, _ = scan_installed_civitai_models()
 
     if filter_folder:
@@ -322,6 +370,8 @@ def do_select_all_installed(filter_folder, sort_label):
         ]
     else:
         visible = installed
+
+    visible = filter_installed_by_tags(visible, _parse_tag_filter(tag_filter_json))
 
     # If everything visible is already selected, treat this as "toggle off" —
     # gives the user a quick way to clear the selection without per-card clicks.
@@ -337,7 +387,7 @@ def do_select_all_installed(filter_folder, sort_label):
         "Filename (A-Z)": "name_asc",
         "Filename (Z-A)": "name_desc",
     }.get(sort_label, "date_desc")
-    return gr.update(value=get_installed_models_html(filter_folder, sort_key))
+    return gr.update(value=get_installed_models_html(filter_folder, sort_key, tag_filter_json))
 
 
 def do_toggle_installed_selection(path_with_suffix):
@@ -357,7 +407,7 @@ def do_toggle_installed_selection(path_with_suffix):
         _selected_installed_paths.add(raw)
 
 
-def do_delete_selected_installed(filter_folder, sort_label):
+def do_delete_selected_installed(filter_folder, sort_label, tag_filter_json="[]"):
     """Delete every model in _selected_installed_paths along with sidecars and
     (conditionally) the cached local model-info directory."""
     from cb_downloader import delete_model
@@ -373,7 +423,7 @@ def do_delete_selected_installed(filter_folder, sort_label):
             "Filename (Z-A)": "name_desc",
         }.get(sort_label, "date_desc")
         return (
-            gr.update(value=get_installed_models_html(filter_folder, sort_key)),
+            gr.update(value=get_installed_models_html(filter_folder, sort_key, tag_filter_json)),
             gr.update(value="No models selected."),
         )
 
@@ -426,7 +476,7 @@ def do_delete_selected_installed(filter_folder, sort_label):
     status = " | ".join(parts)
 
     return (
-        gr.update(value=get_installed_models_html(filter_folder, sort_key)),
+        gr.update(value=get_installed_models_html(filter_folder, sort_key, tag_filter_json)),
         gr.update(value=status),
     )
 
@@ -790,7 +840,8 @@ def do_download_selected(save_local_info=False):
                 preview_url=preview_url,
                 preview_type=preview_type,
                 published_at=version.get("publishedAt", ""),
-                trained_words=version.get("trainedWords", [])
+                trained_words=version.get("trainedWords", []),
+                tags=model.get("tags") or [],
             )
             added += 1
 
@@ -888,7 +939,8 @@ def start_download(model_id_str, version_name, file_index_str, install_path, sav
                 sha256=sha256,
                 preview_url=preview_url, preview_type=preview_type,
                 published_at=v.get("publishedAt", ""),
-                trained_words=v.get("trainedWords", [])
+                trained_words=v.get("trainedWords", []),
+                tags=data.get("tags") or [],
             )
 
             yield gr.update(value=dl_manager.get_status_html())
@@ -956,10 +1008,16 @@ def do_refresh_fav():
     return gr.update(value=get_favorites_html())
 
 
-def do_refresh_installed():
+def do_refresh_installed(filter_folder="", sort_label="Publish Date (Newest)", tag_filter_json="[]"):
     from cb_api import invalidate_installed_scan_cache
     invalidate_installed_scan_cache()
-    return gr.update(value=get_installed_models_html())
+    sort_key = {
+        "Publish Date (Newest)": "date_desc",
+        "Publish Date (Oldest)": "date_asc",
+        "Filename (A-Z)": "name_asc",
+        "Filename (Z-A)": "name_desc",
+    }.get(sort_label, "date_desc")
+    return gr.update(value=get_installed_models_html(filter_folder, sort_key, tag_filter_json))
 
 
 def do_refresh_dl():
@@ -1395,13 +1453,17 @@ def fetch_and_send_image_metadata(image_url):
 
 # --- Installed Models Tab ---
 
-def get_installed_models_html(filter_folder="", sort_by="date_desc"):
+def get_installed_models_html(filter_folder="", sort_by="date_desc", tag_filter_json="[]"):
     """Scan and display installed models as cards with preview.
 
     Uses the cached scan from scan_installed_civitai_models(); cache is invalidated
     on download-complete, delete, or explicit refresh, so folder/sort clicks are
-    instant after the first scan."""
-    from cb_api import scan_installed_civitai_models, make_installed_cards_html
+    instant after the first scan.
+
+    tag_filter_json — JSON-encoded list of tag names. AND-logic (a model must
+    carry every listed tag). Models with no tags are hidden as soon as any tag
+    is selected. See _parse_tag_filter for accepted forms."""
+    from cb_api import scan_installed_civitai_models, make_installed_cards_html, filter_installed_by_tags
 
     installed_models, folders = scan_installed_civitai_models()
 
@@ -1412,6 +1474,9 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc"):
             m for m in installed_models
             if m.get('folder', '').replace('\\', '/').startswith(filter_folder_normalized)
         ]
+
+    # Filter by tags (v1.3)
+    installed_models = filter_installed_by_tags(installed_models, _parse_tag_filter(tag_filter_json))
 
     # Sort models
     import time as _time
@@ -1494,6 +1559,56 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc"):
         threading.Thread(target=_bg_fetch_thumbnails, args=(needs_fetch,), daemon=True).start()
 
     return make_installed_cards_html(installed_models, selected_paths=_selected_installed_paths)
+
+
+def get_installed_tag_panel_html(tag_filter_json="[]"):
+    """Render the Tag filter panel body: search input + scrollable list of
+    (tag, count) checkboxes with selected ones marked. Counts are GLOBAL —
+    they reflect every installed model, unaffected by folder/other tag picks.
+
+    The panel is toggled by JS; server just re-renders on tag change and on
+    installed-cache invalidation (download/delete/refresh)."""
+    from cb_api import scan_installed_civitai_models, count_installed_tags
+
+    installed_models, _ = scan_installed_civitai_models()
+    tag_counts = count_installed_tags(installed_models)
+    selected = set(_parse_tag_filter(tag_filter_json))
+
+    total_tags = len(tag_counts)
+    selected_count = len(selected)
+
+    parts = []
+    parts.append('<div class="civ-tag-panel-inner">')
+    parts.append(
+        '<div class="civ-tag-panel-header">'
+        f'<span class="civ-tag-panel-title">Tags ({selected_count}/{total_tags})</span>'
+        '<button class="civ-tag-panel-clear" type="button">Clear</button>'
+        '</div>'
+    )
+    parts.append(
+        '<input type="text" class="civ-tag-search" placeholder="Search tags..." '
+        'autocomplete="off" spellcheck="false">'
+    )
+    if not tag_counts:
+        parts.append('<div class="civ-tag-empty">No tags found. Save Local on a few models '
+                     'to populate the tag inventory.</div>')
+    else:
+        parts.append('<div class="civ-tag-list">')
+        for tag, count in tag_counts:
+            is_sel = tag in selected
+            cls = "civ-tag-item civ-tag-selected" if is_sel else "civ-tag-item"
+            tag_esc = tag.replace('"', '&quot;').replace("'", "&#39;")
+            tag_disp = html_mod.escape(tag)
+            parts.append(
+                f'<label class="{cls}" data-tag="{tag_esc}" data-tag-lc="{tag.lower()}">'
+                f'<input type="checkbox" class="civ-tag-cb" {"checked" if is_sel else ""}>'
+                f'<span class="civ-tag-name">{tag_disp}</span>'
+                f'<span class="civ-tag-count">({count})</span>'
+                '</label>'
+            )
+        parts.append('</div>')
+    parts.append('</div>')
+    return ''.join(parts)
 
 
 def get_folder_tree_html():
@@ -1787,6 +1902,15 @@ def on_ui_tabs():
                                 elem_id="civ_sidebar_toggle_btn",
                                 scale=0
                             )
+                            # Tag filter toggle. Panel is rendered separately
+                            # (below the actions row) and shown/hidden by JS.
+                            # Label ends up "🏷️ Tags" or "🏷️ Tags (N)" — JS
+                            # rewrites the count as the selection changes.
+                            tag_filter_btn = gr.Button(
+                                "🏷️ Tags",
+                                elem_id="civ_tag_filter_btn",
+                                scale=0
+                            )
                             installed_delete_btn = gr.Button(
                                 "🗑️ Delete Selected",
                                 variant="stop",
@@ -1812,12 +1936,28 @@ def on_ui_tabs():
                             elem_id="civ_installed_html"
                         )
 
+                        # Tag filter panel — rendered server-side with counts,
+                        # toggled open/closed by JS. Lives in the DOM as a
+                        # hidden overlay near the actions row.
+                        installed_tag_panel = gr.HTML(
+                            value=get_installed_tag_panel_html(_load_installed_tag_filter()),
+                            elem_id="civ_installed_tag_panel"
+                        )
+
                 # Hidden states for installed model selection
                 installed_model_id_state = gr.Textbox(visible=False, elem_id="civ_installed_model_id")
                 installed_model_name_state = gr.Textbox(visible=False, elem_id="civ_installed_model_name")
                 installed_filter_folder = gr.Textbox(visible=False, elem_id="civ_installed_filter_folder")
                 # Hidden bridge: JS writes "<path>_<random>" here on checkbox click
                 installed_select_toggle = gr.Textbox(visible=False, elem_id="civ_installed_select_toggle")
+                # v1.3: hidden bridge for tag selection. JS serializes the picked
+                # tags to a JSON array here on every checkbox toggle. Server
+                # persists on change so the state survives WebUI restart.
+                installed_tag_filter = gr.Textbox(
+                    visible=False,
+                    value=_load_installed_tag_filter(),
+                    elem_id="civ_installed_tag_filter",
+                )
 
             # === TAB 4: Downloads ===
             with gr.Tab("Downloads"):
@@ -1907,25 +2047,42 @@ def on_ui_tabs():
             "Filename (Z-A)": "name_desc",
         }
 
-        def _installed_with_sort(folder, sort_label):
+        def _installed_with_sort(folder, sort_label, tag_filter_json):
             sort_key = _sort_label_to_key.get(sort_label, "date_desc")
             _save_installed_sort(sort_key)
-            return get_installed_models_html(folder, sort_key)
+            return get_installed_models_html(folder, sort_key, tag_filter_json)
+
+        def _on_tag_filter_change(folder, sort_label, tag_filter_json):
+            """Tag selection changed → persist, re-render cards, refresh panel
+            so the checked states match what was chosen."""
+            _save_installed_tag_filter(tag_filter_json)
+            sort_key = _sort_label_to_key.get(sort_label, "date_desc")
+            cards = get_installed_models_html(folder, sort_key, tag_filter_json)
+            panel = get_installed_tag_panel_html(tag_filter_json)
+            return cards, panel
 
         # Installed - Folder click or sort change triggers scan + filter.
         # queue=False so Gradio doesn't enqueue these behind unrelated events —
         # the handler is fast once the installed-scan cache is warm.
         installed_filter_folder.change(
             fn=_installed_with_sort,
-            inputs=[installed_filter_folder, installed_sort],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
             outputs=[installed_html],
             queue=False,
             show_progress=False
         )
         installed_sort.change(
             fn=_installed_with_sort,
-            inputs=[installed_filter_folder, installed_sort],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
             outputs=[installed_html],
+            queue=False,
+            show_progress=False
+        )
+        # Installed - Tag filter change → persist + re-render cards + panel.
+        installed_tag_filter.change(
+            fn=_on_tag_filter_change,
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
+            outputs=[installed_html, installed_tag_panel],
             queue=False,
             show_progress=False
         )
@@ -1967,7 +2124,7 @@ def on_ui_tabs():
         # Installed - Batch delete selected models (+ refresh cards + status line)
         installed_delete_btn.click(
             fn=do_delete_selected_installed,
-            inputs=[installed_filter_folder, installed_sort],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
             outputs=[installed_html, installed_delete_status],
             queue=False,
             show_progress=False
@@ -1976,7 +2133,7 @@ def on_ui_tabs():
         # Installed - Select all visible (or toggle off if already all selected)
         installed_select_all_btn.click(
             fn=do_select_all_installed,
-            inputs=[installed_filter_folder, installed_sort],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
             outputs=[installed_html],
             queue=False,
             show_progress=False
@@ -2002,6 +2159,7 @@ def on_ui_tabs():
                 gr.update(value=_saved["save_local"]),
                 gr.update(value=_saved["cards_per_page"]),
                 gr.update(value=_sort_key_to_label.get(_saved.get("installed_sort", "date_desc"), "Publish Date (Newest)")),
+                gr.update(value=_load_installed_tag_filter()),
             )
         # Note: category_filter, content_type, base_model_filter are NOT in this
         # load handler. Including a multiselect Dropdown in .load() outputs makes
@@ -2010,7 +2168,7 @@ def on_ui_tabs():
         # set at declaration time, which is sufficient.
         civitai_browser.load(
             fn=_apply_saved_config,
-            outputs=[search_type, sort_type, period_type, show_nsfw, save_local_on_download, cards_per_page, installed_sort]
+            outputs=[search_type, sort_type, period_type, show_nsfw, save_local_on_download, cards_per_page, installed_sort, installed_tag_filter]
         )
 
     return (civitai_browser, "CivitAI Manager Plus", "civitai_browser_new"),

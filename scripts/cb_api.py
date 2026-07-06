@@ -617,6 +617,7 @@ def scan_installed_civitai_models(force=False):
 
                     # Try to read metadata from JSON file
                     json_path = base_path + '.json'
+                    sidecar_tags = None
                     if os.path.exists(json_path):
                         try:
                             with open(json_path, 'r', encoding='utf-8') as jf:
@@ -629,11 +630,23 @@ def scan_installed_civitai_models(force=False):
                                     model_info['content_type'] = meta.get('content_type', '')
                                     model_info['download_date'] = meta.get('download_date', '')
                                     model_info['published_at'] = meta.get('published_at', '')
+                                    if isinstance(meta.get('tags'), list):
+                                        sidecar_tags = [str(t) for t in meta['tags'] if t]
                                     if not model_info['thumbnail'] and meta.get('thumbnail_url'):
                                         model_info['thumbnail'] = meta['thumbnail_url']
                                         model_info['thumbnail_type'] = meta.get('thumbnail_type', 'image')
                         except Exception:
                             pass
+
+                    # Tags: prefer sidecar (fast, one file), fall back to
+                    # model_info_cache/<id>/info.json which is populated by
+                    # Save Local / the offline-cache tool. About 90% of an
+                    # existing install is covered via the cache; sidecars
+                    # will fill in going forward.
+                    tags = sidecar_tags
+                    if tags is None and model_info.get('civitai_model_id'):
+                        tags = _read_cached_tags(model_info['civitai_model_id'])
+                    model_info['tags'] = tags or []
 
                     installed_models.append(model_info)
         except Exception:
@@ -642,6 +655,64 @@ def scan_installed_civitai_models(force=False):
     result = (installed_models, [])
     _installed_civitai_cache = result
     return result
+
+
+# Resolve the model_info_cache root relative to this file so it survives the
+# drive-letter moves handled in v1.2.3.
+_CACHED_INFO_ROOT = os.path.abspath(os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'model_info_cache',
+))
+
+
+def _read_cached_tags(model_id):
+    """Return a list[str] of tags from the popup cache, or None if unavailable.
+    Reads model_info_cache/<id>/info.json's model_data.tags."""
+    if not model_id:
+        return None
+    try:
+        info_path = os.path.join(_CACHED_INFO_ROOT, str(model_id), 'info.json')
+        if not os.path.exists(info_path):
+            return None
+        with open(info_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        md = data.get('model_data')
+        if not isinstance(md, dict):
+            return None
+        tags = md.get('tags')
+        if not isinstance(tags, list):
+            return None
+        return [str(t) for t in tags if t]
+    except Exception:
+        return None
+
+
+def count_installed_tags(installed_models):
+    """Return list[(tag, count)] sorted by count desc then name asc.
+    Global inventory across all installed models — the count doesn't shrink
+    when the user picks a folder or another tag."""
+    from collections import Counter
+    counter = Counter()
+    for m in installed_models or []:
+        for t in m.get('tags') or []:
+            if isinstance(t, str) and t:
+                counter[t] += 1
+    return sorted(counter.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+
+
+def filter_installed_by_tags(installed_models, tag_filter):
+    """AND-filter: keep a model only if it has ALL tags in tag_filter.
+    An empty tag_filter returns the input unchanged. Models with no tags are
+    hidden as soon as any tag is selected."""
+    if not tag_filter:
+        return installed_models
+    wanted = {str(t) for t in tag_filter if t}
+    if not wanted:
+        return installed_models
+    return [m for m in installed_models
+            if wanted.issubset(set(m.get('tags') or []))]
 
 
 def make_installed_cards_html(installed_models, selected_paths=None):
