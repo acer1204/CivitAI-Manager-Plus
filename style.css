@@ -1156,9 +1156,21 @@
     color: var(--body-text-color);
 }
 .civ-tag-cb {
+    /* Restore native checkbox rendering — SD WebUI's global CSS neutralises
+       inputs with `appearance:none` and zero size, so a bare <input> shows as
+       an empty box with no check mark. Force the browser-native look back on. */
+    appearance: auto !important;
+    -webkit-appearance: auto !important;
+    width: 16px !important;
+    height: 16px !important;
+    min-width: 16px;
+    min-height: 16px;
+    flex: 0 0 auto;
     margin: 0;
+    padding: 0;
     accent-color: var(--color-accent, #6366f1);
     cursor: pointer;
+    opacity: 1;
 }
 .civ-tag-name {
     flex: 1 1 auto;
