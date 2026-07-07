@@ -1687,6 +1687,16 @@ def get_installed_tag_panel_html(tag_filter_json="[]", filter_folder=""):
     subset = filter_installed_by_tags(subset, selected)
     tag_counts = count_installed_tags(subset)
 
+    # Always surface the currently-selected tags in the panel even if the
+    # subset intersection made them count 0 — otherwise the user picks an
+    # incompatible combination, the panel empties out, and the ONLY way to
+    # recover is the Clear button. Injecting them at the top with count 0
+    # lets them uncheck the offender individually.
+    tag_lookup = {tag: cnt for tag, cnt in tag_counts}
+    missing_selected = [t for t in selected_set if t not in tag_lookup]
+    if missing_selected:
+        tag_counts = [(t, 0) for t in sorted(missing_selected)] + tag_counts
+
     total_tags = len(tag_counts)
     selected_count = len(selected_set)
 
