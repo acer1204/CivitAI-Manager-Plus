@@ -1117,15 +1117,25 @@
     width: 100%;
     padding: 6px 10px;
     font-size: 0.9em;
-    background: var(--background-fill-primary);
-    color: var(--body-text-color);
-    border: 1px solid var(--border-color-primary);
+    /* SD WebUI's global input styles override --body-text-color to white
+       AND paint the background white too, so we lose all contrast. Pin
+       both to explicit values with !important so the search field stays
+       legible regardless of the active theme. */
+    background: #111827 !important;
+    color: #e5e7eb !important;
+    caret-color: #e5e7eb;
+    border: 1px solid var(--border-color-primary, #374151);
     border-radius: 6px;
     box-sizing: border-box;
     outline: none;
 }
+.civ-tag-search::placeholder {
+    color: #9ca3af;
+    opacity: 1;
+}
 .civ-tag-search:focus {
-    border-color: var(--color-accent);
+    border-color: var(--color-accent, #6366f1) !important;
+    box-shadow: 0 0 0 1px var(--color-accent, #6366f1);
 }
 
 .civ-tag-list {
