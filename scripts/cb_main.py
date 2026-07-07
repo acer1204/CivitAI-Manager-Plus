@@ -876,7 +876,7 @@ def do_download_selected(save_local_info=False):
                 preview_type=preview_type,
                 published_at=version.get("publishedAt", ""),
                 trained_words=version.get("trainedWords", []),
-                tags=model.get("tags") or [],
+                tags=data.get("tags") or [],
             )
             added += 1
 
