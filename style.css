@@ -1024,6 +1024,33 @@
     padding: 12px 0;
 }
 
+/* ─────────────── v1.3: Installed tab pagination ─────────────── */
+#civ_installed_pagination {
+    margin-top: 6px;
+    align-items: center;
+    gap: 8px;
+}
+#civ_installed_prev_btn,
+#civ_installed_next_btn,
+#civ_installed_prev_btn button,
+#civ_installed_next_btn button {
+    height: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+    padding: 0 12px !important;
+    min-width: 90px;
+    white-space: nowrap;
+}
+#civ_installed_page_info textarea,
+#civ_installed_page_info input {
+    text-align: center;
+    font-size: 0.9em;
+    color: var(--body-text-color, #e5e7eb);
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
 /* ─────────────── v1.3: Installed tag filter ─────────────── */
 
 /* Match the sizing of the hamburger / delete / select-all buttons in the

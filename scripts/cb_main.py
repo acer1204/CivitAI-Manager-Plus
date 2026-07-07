@@ -355,23 +355,29 @@ def _strip_random_suffix(value):
     return s.rsplit('_', 1)[0] if '_' in s else s
 
 
-def do_select_all_installed(filter_folder, sort_label, tag_filter_json="[]"):
-    """Select every installed card currently visible — respects both the
-    active folder AND the active tag filter, so users can mass-select what
-    they can see, not the whole install."""
-    from cb_api import scan_installed_civitai_models, filter_installed_by_tags
-    installed, _ = scan_installed_civitai_models()
+def do_select_all_installed(filter_folder, sort_label, tag_filter_json="[]", page=1, page_size="100"):
+    """Select every card on the CURRENT page — respects folder, tag filter,
+    AND pagination, so users mass-select what they actually see, not the
+    whole (potentially thousands-strong) filtered set."""
+    sort_key = {
+        "Publish Date (Newest)": "date_desc",
+        "Publish Date (Oldest)": "date_asc",
+        "Filename (A-Z)": "name_asc",
+        "Filename (Z-A)": "name_desc",
+    }.get(sort_label, "date_desc")
 
-    if filter_folder:
-        normalized = filter_folder.replace('\\', '/')
-        visible = [
-            m for m in installed
-            if m.get('folder', '').replace('\\', '/').startswith(normalized)
-        ]
+    filtered = _scan_and_filter_installed(filter_folder, sort_key, tag_filter_json)
+    size = _parse_page_size(page_size)
+    try:
+        page_int = max(1, int(page or 1))
+    except (ValueError, TypeError):
+        page_int = 1
+    if size is None or not filtered:
+        visible = filtered
     else:
-        visible = installed
-
-    visible = filter_installed_by_tags(visible, _parse_tag_filter(tag_filter_json))
+        total_pages = max(1, (len(filtered) + size - 1) // size)
+        page_int = min(page_int, total_pages)
+        visible = filtered[(page_int - 1) * size:page_int * size]
 
     # If everything visible is already selected, treat this as "toggle off" —
     # gives the user a quick way to clear the selection without per-card clicks.
@@ -381,13 +387,13 @@ def do_select_all_installed(filter_folder, sort_label, tag_filter_json="[]"):
     else:
         _selected_installed_paths.update(visible_paths)
 
-    sort_key = {
-        "Publish Date (Newest)": "date_desc",
-        "Publish Date (Oldest)": "date_asc",
-        "Filename (A-Z)": "name_asc",
-        "Filename (Z-A)": "name_desc",
-    }.get(sort_label, "date_desc")
-    return gr.update(value=get_installed_models_html(filter_folder, sort_key, tag_filter_json))
+    cards_html, page_info, effective_page = get_installed_models_html(
+        filter_folder, sort_key, tag_filter_json, page_int, page_size)
+    return (
+        gr.update(value=cards_html),
+        gr.update(value=page_info),
+        effective_page,
+    )
 
 
 def do_toggle_installed_selection(path_with_suffix):
@@ -407,24 +413,30 @@ def do_toggle_installed_selection(path_with_suffix):
         _selected_installed_paths.add(raw)
 
 
-def do_delete_selected_installed(filter_folder, sort_label, tag_filter_json="[]"):
+def do_delete_selected_installed(filter_folder, sort_label, tag_filter_json="[]",
+                                  page=1, page_size="100"):
     """Delete every model in _selected_installed_paths along with sidecars and
-    (conditionally) the cached local model-info directory."""
+    (conditionally) the cached local model-info directory. Re-renders the
+    current page (clamped if the deletion emptied the last page)."""
     from cb_downloader import delete_model
     from cb_api import scan_installed_civitai_models, invalidate_installed_scan_cache
 
+    sort_key = {
+        "Publish Date (Newest)": "date_desc",
+        "Publish Date (Oldest)": "date_asc",
+        "Filename (A-Z)": "name_asc",
+        "Filename (Z-A)": "name_desc",
+    }.get(sort_label, "date_desc")
+
     paths = list(_selected_installed_paths)
     if not paths:
-        # Nothing selected — keep current HTML, surface a status line
-        sort_key = {
-            "Publish Date (Newest)": "date_desc",
-            "Publish Date (Oldest)": "date_asc",
-            "Filename (A-Z)": "name_asc",
-            "Filename (Z-A)": "name_desc",
-        }.get(sort_label, "date_desc")
+        cards_html, page_info, effective_page = get_installed_models_html(
+            filter_folder, sort_key, tag_filter_json, page, page_size)
         return (
-            gr.update(value=get_installed_models_html(filter_folder, sort_key, tag_filter_json)),
+            gr.update(value=cards_html),
             gr.update(value="No models selected."),
+            gr.update(value=page_info),
+            effective_page,
         )
 
     # Collect model_ids for each path so we know which local-info caches to drop.
@@ -461,13 +473,6 @@ def do_delete_selected_installed(filter_folder, sort_label, tag_filter_json="[]"
 
     _selected_installed_paths.clear()
 
-    sort_key = {
-        "Publish Date (Newest)": "date_desc",
-        "Publish Date (Oldest)": "date_asc",
-        "Filename (A-Z)": "name_asc",
-        "Filename (Z-A)": "name_desc",
-    }.get(sort_label, "date_desc")
-
     parts = [f"Deleted {deleted} model(s)"]
     if local_info_dropped:
         parts.append(f"cleared {local_info_dropped} cached info folder(s)")
@@ -475,9 +480,13 @@ def do_delete_selected_installed(filter_folder, sort_label, tag_filter_json="[]"
         parts.append(f"failed: {', '.join(failed[:5])}{'…' if len(failed) > 5 else ''}")
     status = " | ".join(parts)
 
+    cards_html, page_info, effective_page = get_installed_models_html(
+        filter_folder, sort_key, tag_filter_json, page, page_size)
     return (
-        gr.update(value=get_installed_models_html(filter_folder, sort_key, tag_filter_json)),
+        gr.update(value=cards_html),
         gr.update(value=status),
+        gr.update(value=page_info),
+        effective_page,
     )
 
 
@@ -1008,7 +1017,8 @@ def do_refresh_fav():
     return gr.update(value=get_favorites_html())
 
 
-def do_refresh_installed(filter_folder="", sort_label="Publish Date (Newest)", tag_filter_json="[]"):
+def do_refresh_installed(filter_folder="", sort_label="Publish Date (Newest)",
+                          tag_filter_json="[]", page=1, page_size="100"):
     from cb_api import invalidate_installed_scan_cache
     invalidate_installed_scan_cache()
     sort_key = {
@@ -1017,7 +1027,9 @@ def do_refresh_installed(filter_folder="", sort_label="Publish Date (Newest)", t
         "Filename (A-Z)": "name_asc",
         "Filename (Z-A)": "name_desc",
     }.get(sort_label, "date_desc")
-    return gr.update(value=get_installed_models_html(filter_folder, sort_key, tag_filter_json))
+    cards_html, page_info, effective_page = get_installed_models_html(
+        filter_folder, sort_key, tag_filter_json, page, page_size)
+    return gr.update(value=cards_html), gr.update(value=page_info), effective_page
 
 
 def do_refresh_dl():
@@ -1453,35 +1465,70 @@ def fetch_and_send_image_metadata(image_url):
 
 # --- Installed Models Tab ---
 
-def get_installed_models_html(filter_folder="", sort_by="date_desc", tag_filter_json="[]"):
-    """Scan and display installed models as cards with preview.
+_INSTALLED_PAGE_SIZE_CHOICES = ["50", "100", "200", "All"]
+_INSTALLED_PAGE_SIZE_DEFAULT = "100"
 
-    Uses the cached scan from scan_installed_civitai_models(); cache is invalidated
-    on download-complete, delete, or explicit refresh, so folder/sort clicks are
-    instant after the first scan.
 
-    tag_filter_json — JSON-encoded list of tag names. AND-logic (a model must
-    carry every listed tag). Models with no tags are hidden as soon as any tag
-    is selected. See _parse_tag_filter for accepted forms."""
-    from cb_api import scan_installed_civitai_models, make_installed_cards_html, filter_installed_by_tags
+def _parse_page_size(value):
+    """Convert the dropdown label ("50"/"100"/"200"/"All") into an int, or
+    None for the 'render everything on one page' case."""
+    if value in (None, "", "All", "all"):
+        return None
+    try:
+        n = int(value)
+        return n if n > 0 else None
+    except (ValueError, TypeError):
+        return None
 
-    installed_models, folders = scan_installed_civitai_models()
 
-    # Filter by folder
+def _save_installed_page_size(value):
+    """Persist the page-size dropdown so it survives WebUI restart."""
+    if value not in _INSTALLED_PAGE_SIZE_CHOICES:
+        return
+    try:
+        config = {}
+        if os.path.exists(_SEARCH_CONFIG_FILE):
+            with open(_SEARCH_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        config["installed_page_size"] = value
+        with open(_SEARCH_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _load_installed_page_size():
+    try:
+        if os.path.exists(_SEARCH_CONFIG_FILE):
+            with open(_SEARCH_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            v = config.get("installed_page_size")
+            if v in _INSTALLED_PAGE_SIZE_CHOICES:
+                return v
+    except Exception:
+        pass
+    return _INSTALLED_PAGE_SIZE_DEFAULT
+
+
+def _scan_and_filter_installed(filter_folder, sort_by, tag_filter_json):
+    """Shared: scan → folder filter → tag filter → sort. Returns the fully
+    filtered + sorted list of installed models (no slicing). Kicks off the
+    background thumbnail-fetch for entries without a local preview."""
+    from cb_api import scan_installed_civitai_models, filter_installed_by_tags
+
+    installed_models, _folders = scan_installed_civitai_models()
+
     if filter_folder:
-        filter_folder_normalized = filter_folder.replace('\\', '/')
+        normalized = filter_folder.replace('\\', '/')
         installed_models = [
             m for m in installed_models
-            if m.get('folder', '').replace('\\', '/').startswith(filter_folder_normalized)
+            if m.get('folder', '').replace('\\', '/').startswith(normalized)
         ]
 
-    # Filter by tags (v1.3)
     installed_models = filter_installed_by_tags(installed_models, _parse_tag_filter(tag_filter_json))
 
-    # Sort models
     import time as _time
     def _date_key(m):
-        # Use published_at first, then download_date, then file mtime
         pa = m.get('published_at', '')
         if pa:
             return pa
@@ -1503,7 +1550,6 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc", tag_filter_
     elif sort_by == "name_desc":
         installed_models.sort(key=_name_key, reverse=True)
 
-    # For models without local preview, fetch thumbnails from API in background
     needs_fetch = [m for m in installed_models if not m.get('thumbnail') and m.get('civitai_model_id')]
     if needs_fetch:
         def _bg_fetch_thumbnails(models):
@@ -1528,7 +1574,6 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc", tag_filter_
                     base = os.path.splitext(model['path'])[0]
 
                     if img_type == 'video':
-                        # Video: download as .preview.mp4
                         dl_url = url.replace("width=", "transcode=true,width=")
                         preview_path = base + '.preview.mp4'
                         if not os.path.exists(preview_path):
@@ -1542,7 +1587,6 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc", tag_filter_
                         model['thumbnail'] = f"/file={preview_path}" if os.path.exists(preview_path) else url
                         model['thumbnail_type'] = 'video'
                     else:
-                        # Image: download as .preview.png
                         preview_path = base + '.preview.png'
                         if not os.path.exists(preview_path):
                             try:
@@ -1558,7 +1602,55 @@ def get_installed_models_html(filter_folder="", sort_by="date_desc", tag_filter_
                     pass
         threading.Thread(target=_bg_fetch_thumbnails, args=(needs_fetch,), daemon=True).start()
 
-    return make_installed_cards_html(installed_models, selected_paths=_selected_installed_paths)
+    return installed_models
+
+
+def get_installed_models_html(filter_folder="", sort_by="date_desc", tag_filter_json="[]",
+                              page=1, page_size="100"):
+    """Scan → filter → sort → paginate → render.
+
+    Returns (cards_html, page_info_text, effective_page) so the same call
+    can drive #civ_installed_html, the page_info textbox, and the page
+    State. `effective_page` is the input page clamped to [1, total_pages],
+    so callers should feed it back into the State — that way deletes on
+    the last page auto-clamp instead of showing an empty grid.
+
+    page_size — dropdown label ("50"/"100"/"200"/"All"). Rendering 3000
+    cards at once made the browser jank (especially on tag toggle), which
+    is why we paginate; "All" is kept as an opt-in escape hatch."""
+    from cb_api import make_installed_cards_html
+
+    installed_models = _scan_and_filter_installed(filter_folder, sort_by, tag_filter_json)
+    total = len(installed_models)
+    size = _parse_page_size(page_size)
+
+    try:
+        page_int = max(1, int(page or 1))
+    except (ValueError, TypeError):
+        page_int = 1
+
+    if size is None or total == 0:
+        total_pages = 1
+        effective_page = 1
+        slice_models = installed_models
+    else:
+        total_pages = max(1, (total + size - 1) // size)
+        effective_page = min(page_int, total_pages)
+        start = (effective_page - 1) * size
+        slice_models = installed_models[start:start + size]
+
+    cards_html = make_installed_cards_html(slice_models, selected_paths=_selected_installed_paths)
+
+    if total == 0:
+        page_info = "No models"
+    elif size is None or total <= size:
+        page_info = f"Showing all {total}"
+    else:
+        start_num = (effective_page - 1) * size + 1
+        end_num = min(effective_page * size, total)
+        page_info = f"Page {effective_page} / {total_pages}  ·  {start_num}-{end_num} of {total}"
+
+    return cards_html, page_info, effective_page
 
 
 def get_installed_tag_panel_html(tag_filter_json="[]", filter_folder=""):
@@ -1946,6 +2038,36 @@ def on_ui_tabs():
                             installed_delete_status = gr.HTML(
                                 value="", elem_id="civ_installed_delete_status"
                             )
+                        # v1.3 pagination controls — always visible above the
+                        # cards grid. Rendering thousands of cards at once
+                        # jams the browser on tag toggle, so we slice to a
+                        # page. "All" is available for anyone who wants the
+                        # old behaviour.
+                        with gr.Row(elem_id="civ_installed_pagination"):
+                            installed_prev_btn = gr.Button(
+                                "← Prev",
+                                elem_id="civ_installed_prev_btn",
+                                scale=0,
+                            )
+                            installed_page_info = gr.Textbox(
+                                value="No models",
+                                interactive=False, show_label=False,
+                                elem_id="civ_installed_page_info",
+                                scale=3,
+                            )
+                            installed_next_btn = gr.Button(
+                                "Next →",
+                                elem_id="civ_installed_next_btn",
+                                scale=0,
+                            )
+                            installed_page_size = gr.Dropdown(
+                                choices=_INSTALLED_PAGE_SIZE_CHOICES,
+                                value=_load_installed_page_size(),
+                                label="Per page",
+                                elem_id="civ_installed_page_size",
+                                scale=1,
+                            )
+
                         installed_html = gr.HTML(
                             value='<div class="civ-no-results">Select a folder to view models.</div>',
                             elem_id="civ_installed_html"
@@ -1973,6 +2095,10 @@ def on_ui_tabs():
                     value=_load_installed_tag_filter(),
                     elem_id="civ_installed_tag_filter",
                 )
+                # Server-only int state for the current Installed-tab page.
+                # Not persisted across restarts — resets to page 1 on load,
+                # which matches how faceted-list UIs typically behave.
+                installed_page_state = gr.State(1)
 
             # === TAB 4: Downloads ===
             with gr.Tab("Downloads"):
@@ -2062,53 +2188,104 @@ def on_ui_tabs():
             "Filename (Z-A)": "name_desc",
         }
 
-        def _installed_with_sort(folder, sort_label, tag_filter_json):
+        # All handlers that materially change the filtered result (folder,
+        # sort, tag filter, page size) reset the page cursor back to 1 —
+        # otherwise you'd be stuck on "page 5" of a query with only 2 pages.
+        def _render_installed(folder, sort_label, tag_filter_json, page, page_size):
             sort_key = _sort_label_to_key.get(sort_label, "date_desc")
-            _save_installed_sort(sort_key)
-            return get_installed_models_html(folder, sort_key, tag_filter_json)
+            cards, info, eff = get_installed_models_html(
+                folder, sort_key, tag_filter_json, page, page_size)
+            return cards, info, eff
 
-        def _on_folder_change(folder, sort_label, tag_filter_json):
-            """Folder click → cards refilter AND tag counts recompute for the
-            new folder context. Sort is persisted only for legibility (matches
-            what the sort dropdown shows next time)."""
+        def _installed_with_sort(folder, sort_label, tag_filter_json, page_size):
             sort_key = _sort_label_to_key.get(sort_label, "date_desc")
             _save_installed_sort(sort_key)
-            cards = get_installed_models_html(folder, sort_key, tag_filter_json)
+            cards, info, eff = get_installed_models_html(
+                folder, sort_key, tag_filter_json, 1, page_size)
+            return cards, info, eff
+
+        def _on_folder_change(folder, sort_label, tag_filter_json, page_size):
+            """Folder click → cards refilter, tag counts recompute for the
+            new folder context, page cursor resets to 1."""
+            sort_key = _sort_label_to_key.get(sort_label, "date_desc")
+            _save_installed_sort(sort_key)
+            cards, info, eff = get_installed_models_html(
+                folder, sort_key, tag_filter_json, 1, page_size)
             panel = get_installed_tag_panel_html(tag_filter_json, folder)
-            return cards, panel
+            return cards, panel, info, eff
 
-        def _on_tag_filter_change(folder, sort_label, tag_filter_json):
-            """Tag selection changed → persist, re-render cards, refresh panel
-            with faceted counts + updated checkbox states."""
+        def _on_tag_filter_change(folder, sort_label, tag_filter_json, page_size):
             _save_installed_tag_filter(tag_filter_json)
             sort_key = _sort_label_to_key.get(sort_label, "date_desc")
-            cards = get_installed_models_html(folder, sort_key, tag_filter_json)
+            cards, info, eff = get_installed_models_html(
+                folder, sort_key, tag_filter_json, 1, page_size)
             panel = get_installed_tag_panel_html(tag_filter_json, folder)
-            return cards, panel
+            return cards, panel, info, eff
 
-        # Installed - Folder click re-renders cards AND the tag panel (so
-        # counts are scoped to the new folder). Sort just re-renders cards.
-        # queue=False so Gradio doesn't enqueue these behind unrelated events —
-        # the handler is fast once the installed-scan cache is warm.
+        def _on_page_size_change(folder, sort_label, tag_filter_json, page_size):
+            _save_installed_page_size(page_size)
+            sort_key = _sort_label_to_key.get(sort_label, "date_desc")
+            cards, info, eff = get_installed_models_html(
+                folder, sort_key, tag_filter_json, 1, page_size)
+            return cards, info, eff
+
+        def _on_page_prev(folder, sort_label, tag_filter_json, page, page_size):
+            try:
+                p = max(1, int(page or 1) - 1)
+            except (ValueError, TypeError):
+                p = 1
+            return _render_installed(folder, sort_label, tag_filter_json, p, page_size)
+
+        def _on_page_next(folder, sort_label, tag_filter_json, page, page_size):
+            try:
+                p = int(page or 1) + 1
+            except (ValueError, TypeError):
+                p = 2
+            return _render_installed(folder, sort_label, tag_filter_json, p, page_size)
+
+        # Installed - Folder click re-renders cards AND the tag panel AND
+        # resets page to 1. queue=False so Gradio doesn't enqueue these
+        # behind unrelated events — the handler is fast once the
+        # installed-scan cache is warm.
         installed_filter_folder.change(
             fn=_on_folder_change,
-            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
-            outputs=[installed_html, installed_tag_panel],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter, installed_page_size],
+            outputs=[installed_html, installed_tag_panel, installed_page_info, installed_page_state],
             queue=False,
             show_progress=False
         )
         installed_sort.change(
             fn=_installed_with_sort,
-            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
-            outputs=[installed_html],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter, installed_page_size],
+            outputs=[installed_html, installed_page_info, installed_page_state],
             queue=False,
             show_progress=False
         )
-        # Installed - Tag filter change → persist + re-render cards + panel.
         installed_tag_filter.change(
             fn=_on_tag_filter_change,
-            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
-            outputs=[installed_html, installed_tag_panel],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter, installed_page_size],
+            outputs=[installed_html, installed_tag_panel, installed_page_info, installed_page_state],
+            queue=False,
+            show_progress=False
+        )
+        installed_page_size.change(
+            fn=_on_page_size_change,
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter, installed_page_size],
+            outputs=[installed_html, installed_page_info, installed_page_state],
+            queue=False,
+            show_progress=False
+        )
+        installed_prev_btn.click(
+            fn=_on_page_prev,
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter, installed_page_state, installed_page_size],
+            outputs=[installed_html, installed_page_info, installed_page_state],
+            queue=False,
+            show_progress=False
+        )
+        installed_next_btn.click(
+            fn=_on_page_next,
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter, installed_page_state, installed_page_size],
+            outputs=[installed_html, installed_page_info, installed_page_state],
             queue=False,
             show_progress=False
         )
@@ -2147,20 +2324,24 @@ def on_ui_tabs():
             show_progress="hidden"
         )
 
-        # Installed - Batch delete selected models (+ refresh cards + status line)
+        # Installed - Batch delete selected models. Also re-emits page info
+        # + effective page in case the deletion cleared the last page.
         installed_delete_btn.click(
             fn=do_delete_selected_installed,
-            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
-            outputs=[installed_html, installed_delete_status],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter,
+                    installed_page_state, installed_page_size],
+            outputs=[installed_html, installed_delete_status,
+                     installed_page_info, installed_page_state],
             queue=False,
             show_progress=False
         )
 
-        # Installed - Select all visible (or toggle off if already all selected)
+        # Installed - Select all on the CURRENT PAGE (or toggle off if all selected).
         installed_select_all_btn.click(
             fn=do_select_all_installed,
-            inputs=[installed_filter_folder, installed_sort, installed_tag_filter],
-            outputs=[installed_html],
+            inputs=[installed_filter_folder, installed_sort, installed_tag_filter,
+                    installed_page_state, installed_page_size],
+            outputs=[installed_html, installed_page_info, installed_page_state],
             queue=False,
             show_progress=False
         )
@@ -2186,6 +2367,7 @@ def on_ui_tabs():
                 gr.update(value=_saved["cards_per_page"]),
                 gr.update(value=_sort_key_to_label.get(_saved.get("installed_sort", "date_desc"), "Publish Date (Newest)")),
                 gr.update(value=_load_installed_tag_filter()),
+                gr.update(value=_load_installed_page_size()),
             )
         # Note: category_filter, content_type, base_model_filter are NOT in this
         # load handler. Including a multiselect Dropdown in .load() outputs makes
@@ -2194,7 +2376,8 @@ def on_ui_tabs():
         # set at declaration time, which is sufficient.
         civitai_browser.load(
             fn=_apply_saved_config,
-            outputs=[search_type, sort_type, period_type, show_nsfw, save_local_on_download, cards_per_page, installed_sort, installed_tag_filter]
+            outputs=[search_type, sort_type, period_type, show_nsfw, save_local_on_download,
+                     cards_per_page, installed_sort, installed_tag_filter, installed_page_size]
         )
 
     return (civitai_browser, "CivitAI Manager Plus", "civitai_browser_new"),
