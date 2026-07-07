@@ -2140,6 +2140,27 @@ def on_ui_tabs():
         prev_btn.click(fn=do_prev_page, inputs=search_inputs, outputs=search_outputs)
         next_btn.click(fn=do_next_page, inputs=search_inputs, outputs=search_outputs)
 
+        # Persist every filter change eagerly. Historically the search config
+        # was written only on Search click, so users who cleared Category /
+        # Content type / Base model without pressing Search saw the OLD
+        # selection reappear after a restart. Bind a lightweight save to
+        # each filter's `.change` so any edit sticks the moment it happens.
+        # search_input is intentionally excluded — it fires per keystroke and
+        # its value is still saved on Search click / submit.
+        _autosave_fields = [
+            search_type, content_type, base_model_filter, category_filter,
+            user_filter, sort_type, period_type, show_nsfw, cards_per_page,
+            save_local_on_download,
+        ]
+        for _f in _autosave_fields:
+            _f.change(
+                fn=_save_search_config,
+                inputs=search_inputs,
+                outputs=[],
+                queue=False,
+                show_progress=False,
+            )
+
         # Browse card click → open model info popup (triggered from JS via textbox)
         model_select_trigger.change(
             fn=get_model_info_html,
