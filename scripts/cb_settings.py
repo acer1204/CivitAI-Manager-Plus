@@ -80,5 +80,20 @@ def on_ui_settings():
                "tab after changing.")
     )
 
+    # Page size for the Installed grid. Rendering the full library at once
+    # jams the browser on large collections, so we paginate — this option
+    # lets the user pick the batch size (100 is the shipped default).
+    # "All" disables pagination.
+    shared.opts.add_option(
+        "civitai_installed_page_size",
+        shared.OptionInfo(
+            "100", "Installed — cards per page",
+            gr.Radio, {"choices": ["50", "100", "200", "All"]},
+            section=section
+        ).info("How many installed cards render at once. Larger = fewer "
+               "page flips but slower filter response on big libraries. "
+               "Refresh the browser tab after changing.")
+    )
+
 
 script_callbacks.on_ui_settings(on_ui_settings)
