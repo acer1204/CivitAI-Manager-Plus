@@ -55,5 +55,30 @@ def on_ui_settings():
         )
     )
 
+    # v1.3 — separate card-size sliders for Browse (search results) and
+    # Installed grids. Values are in em (browser font-size units) so they
+    # scale with the WebUI zoom. Preview media height auto-tracks width at
+    # a fixed 1.4 ratio (portrait, matches CivitAI's typical preview shape).
+    shared.opts.add_option(
+        "civitai_browse_card_width",
+        shared.OptionInfo(
+            10, "Browse — card width (em)",
+            gr.Slider, {"minimum": 6, "maximum": 20, "step": 1},
+            section=section
+        ).info("Card width for the Browse (search results) grid. "
+               "Larger = fewer per row but bigger previews. Refresh the "
+               "browser tab after changing.")
+    )
+
+    shared.opts.add_option(
+        "civitai_installed_card_width",
+        shared.OptionInfo(
+            10, "Installed — card width (em)",
+            gr.Slider, {"minimum": 6, "maximum": 20, "step": 1},
+            section=section
+        ).info("Card width for the Installed grid. Refresh the browser "
+               "tab after changing.")
+    )
+
 
 script_callbacks.on_ui_settings(on_ui_settings)

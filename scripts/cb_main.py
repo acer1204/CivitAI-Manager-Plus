@@ -47,6 +47,33 @@ _model_data_cache = {}  # Temporary cache: model_id -> {"model_data": ..., "vers
 _CACHE_TOKEN = "__CIV_CACHE__"
 
 
+def _get_card_size_style():
+    """Emit a <style> block that sets CSS custom properties for card sizing
+    based on values in Settings > CivitAI Manager Plus. Read at tab-load
+    time so a browser refresh picks up user changes without restarting the
+    server. Media height auto-tracks card width at a 1.4 portrait ratio."""
+    def _read(name, default):
+        try:
+            v = float(getattr(shared.opts, name, default) or default)
+        except (ValueError, TypeError):
+            v = default
+        # Guard against pathological values that would visibly break layout.
+        return max(4.0, min(30.0, v))
+
+    bw = _read("civitai_browse_card_width", 10)
+    iw = _read("civitai_installed_card_width", 10)
+    bh = bw * 1.4
+    ih = iw * 1.4
+    return (
+        f'<style>:root{{'
+        f'--civ-browse-card-width:{bw}em;'
+        f'--civ-installed-card-width:{iw}em;'
+        f'--civ-browse-media-height:{bh}em;'
+        f'--civ-installed-media-height:{ih}em;'
+        f'}}</style>'
+    )
+
+
 def _to_cache_token(abs_path):
     """Replace _MODEL_INFO_DIR prefix in an absolute path with _CACHE_TOKEN."""
     if not isinstance(abs_path, str) or not abs_path:
@@ -1875,6 +1902,14 @@ def do_toggle_local_save(trigger_str):
 def on_ui_tabs():
     with gr.Blocks() as civitai_browser:
 
+        # Runtime <style> block driven by Settings — sets the card-size CSS
+        # vars every time the tab loads so Settings changes take effect on
+        # browser refresh without a full WebUI restart.
+        card_size_style = gr.HTML(
+            value=_get_card_size_style(),
+            elem_id="civ_card_size_style",
+        )
+
         # Hidden states
         model_id_state = gr.Textbox(visible=False, elem_id="civ_model_id")
         model_name_state = gr.Textbox(visible=False, elem_id="civ_model_name")
@@ -2368,6 +2403,7 @@ def on_ui_tabs():
                 gr.update(value=_sort_key_to_label.get(_saved.get("installed_sort", "date_desc"), "Publish Date (Newest)")),
                 gr.update(value=_load_installed_tag_filter()),
                 gr.update(value=_load_installed_page_size()),
+                gr.update(value=_get_card_size_style()),
             )
         # Note: category_filter, content_type, base_model_filter are NOT in this
         # load handler. Including a multiselect Dropdown in .load() outputs makes
@@ -2377,7 +2413,8 @@ def on_ui_tabs():
         civitai_browser.load(
             fn=_apply_saved_config,
             outputs=[search_type, sort_type, period_type, show_nsfw, save_local_on_download,
-                     cards_per_page, installed_sort, installed_tag_filter, installed_page_size]
+                     cards_per_page, installed_sort, installed_tag_filter, installed_page_size,
+                     card_size_style]
         )
 
     return (civitai_browser, "CivitAI Manager Plus", "civitai_browser_new"),
