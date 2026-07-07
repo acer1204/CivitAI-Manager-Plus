@@ -756,7 +756,18 @@ setInterval(function() {
 // close on outside click, live search filter, checkbox → JSON to Gradio,
 // clear-all, and the (N) count next to the toolbar button.
 
+// Local authoritative copy of the selected tag set. Rapid clicks accumulate
+// here, then a debounced writer flushes to Gradio once things settle so the
+// server only sees a single request per burst. Fixes an ordering race where
+// concurrent Gradio round-trips could land out-of-order and render cards
+// filtered by a stale intermediate state (e.g. panel says "no tags" but
+// cards still show the "just-character" subset).
+let _pendingTagFilter = null;
+let _tagFilterFlushTimer = null;
+const _TAG_FILTER_DEBOUNCE_MS = 250;
+
 function _readTagFilterState() {
+    if (_pendingTagFilter !== null) return [..._pendingTagFilter];
     const el = document.querySelector('#civ_installed_tag_filter textarea');
     if (!el || !el.value) return [];
     try {
@@ -770,8 +781,14 @@ function _readTagFilterState() {
 function _writeTagFilterState(tags) {
     // Sort so the persisted list is deterministic — makes debugging easier
     // and avoids spurious Gradio change events from set-order shuffles.
-    const value = JSON.stringify([...new Set(tags.map(String))].sort());
-    updateGradioTextbox('#civ_installed_tag_filter', value);
+    _pendingTagFilter = [...new Set(tags.map(String))].sort();
+    clearTimeout(_tagFilterFlushTimer);
+    _tagFilterFlushTimer = setTimeout(() => {
+        if (_pendingTagFilter === null) return;
+        const value = JSON.stringify(_pendingTagFilter);
+        _pendingTagFilter = null;
+        updateGradioTextbox('#civ_installed_tag_filter', value);
+    }, _TAG_FILTER_DEBOUNCE_MS);
 }
 
 function _updateTagButtonBadge() {
